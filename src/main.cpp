@@ -66,7 +66,8 @@ void syncTime() {
 
 void setup() {
     Serial.begin(115200);
-    delay(200);
+    delay(2000);
+    Serial.flush();
     Serial.printf("\n\nStarting weather station [%s]\n", _VERSION);
 
     // LEDs first so we get visible startup feedback.

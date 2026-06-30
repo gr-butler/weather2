@@ -83,7 +83,7 @@ void Anemometer::sampleSlot() {
         online_ = true;
     } else {
         missedSlots_++;
-        Serial.println("Wind: no CAN frame in 250 ms slot, inserted 0");
+        //Serial.println("Wind: no CAN frame in 250 ms slot, inserted 0");
         if (missedSlots_ >= MaxMissedSlots) {
             if (online_) {
                 Serial.println("Wind sensor OFFLINE (5 consecutive missed frames)");
