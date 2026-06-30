@@ -161,6 +161,8 @@ Temperatures reported to WOW must be in **°F**; internally store and compute in
 - Language: **C++17** (PlatformIO default for ESP32).
 - Framework: **Arduino** (PlatformIO `framework = arduino`).
 - Use `platformio.ini` build flags for compile-time constants — do not hard-code values in `.cpp` files that are already in `platformio.ini`.
+- After editing `platformio.ini`, **give the PlatformIO/VS Code extension time to finish refreshing** (it re-parses the config and may re-resolve libraries) before running a build or test — running too soon can fail or use stale settings.
+- Use C:\Users\butlerg\AppData\Roaming\Python\Python313\Scripts\platformio.exe run to build
 
 ### Structure
 - Mirror the Go package structure where practical: separate files for `anemometer`, `rainmeter`, `atmosphere`, `sensors`, `data`, `reporting`.
@@ -176,8 +178,11 @@ Temperatures reported to WOW must be in **°F**; internally store and compute in
 
 ### Networking & Reporting
 - WiFi credentials and site keys must be stored in a separate `private.h` or `secrets.h` (gitignored) — never committed to source control.
-- MQTT publish interval: every **15 minutes** (`ReportFreqMin = 15`) to match the Go implementation.
+- MQTT publish interval: the **weather data** topic `culverhay/weather` is published **every minute** (matching the Go reference loop, which ticks once a minute). The WOW MetOffice upload + NVS persistence run every **`ReportFreqMin` (15) minutes**. (Note: the data publish cadence is per-minute, not per-15-minutes.)
 - If implementing a Prometheus-compatible `/metrics` HTTP endpoint, use the same metric names from the table above.
+
+### Documentation Rule
+If you modify **MQTT topics, MQTT commands, the beacon/status payloads, or REST/web endpoints**, you must also update the relevant tables and descriptions in `README.md`. Keep the documented topic names, command strings, payload field names, and endpoint paths in sync with the code (`include/constants.h`, `src/reporting.cpp`, `src/webserver.cpp`) at all times.
 
 ### Safety & Reliability
 - Validate all sensor readings before use; clamp out-of-range values (see wind sanity clamps above).
