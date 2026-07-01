@@ -143,6 +143,7 @@ unit without a physical visit, then `resume` or `reset`.
   "windspeed": 0.00,
   "windgust": 0.00,
   "winddir": 0.00,
+  "rain_mm_hr": 0.00,
   "rain_day": 0.000
 }
 ```
@@ -199,6 +200,41 @@ existing Prometheus/Grafana dashboards keep working.
 | `river_monitor_api_fetch_errors_total`   | counter | total fetch/parse errors    |
 | `river_monitor_api_fetch_success_total`  | counter | total successful fetches    |
 | `river_monitor_last_scrape_success`      | gauge   | 1 = last scrape OK, else 0  |
+
+### Prometheus scrape config
+
+Weather **and** river metrics are served from the single `/metrics` endpoint on
+port 80, so one scrape job covers everything (the standalone `riverMonitor`
+service and its `:50000` port are no longer needed):
+
+```yaml
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: culverhay
+
+alerting:
+  alertmanagers:
+  - follow_redirects: true
+    scheme: http
+    timeout: 10s
+    api_version: v2
+    static_configs:
+    - targets: []
+
+scrape_configs:
+- job_name: weather
+  honor_timestamps: true
+  metrics_path: /metrics
+  scheme: http
+  static_configs:
+  - targets:
+    - 192.168.3.200:80
+    labels:
+      instance: weather-station
+```
 
 ## Reporting schedule
 

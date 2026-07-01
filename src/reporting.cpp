@@ -401,7 +401,7 @@ void Reporting::publishStatus() {
         "\"atmosphere\":%s,\"rain\":%s,\"wind\":%s,"
         "\"temp\":%.2f,\"humidity\":%.2f,\"pressure\":%.2f,"
         "\"windspeed\":%.2f,\"windgust\":%.2f,\"winddir\":%.2f,"
-        "\"rain_day\":%.3f}",
+        "\"rain_mm_hr\":%.2f,\"rain_day\":%.3f}",
         MqttStationId, ip.c_str(), net::rssi(), millis() / 1000UL,
         (unsigned)ESP.getFreeHeap(), _SEMVER_CORE,
         recoveryMode_ ? "true" : "false",
@@ -409,6 +409,7 @@ void Reporting::publishStatus() {
         (rain_ && rain_->isOnline()) ? "true" : "false",
         (wind_ && wind_->isOnline()) ? "true" : "false", v_.tempC, v_.humidity,
         v_.pressureHpa, v_.windSpeedMph, v_.windGustMph, v_.windDir,
+        rain_ ? rain_->getRate() : 0.0f,
         rain_ ? rain_->getDayAccumulation() : 0.0f);
 
     if (mqtt_.publish(MqttStatusTopic, payload)) {
