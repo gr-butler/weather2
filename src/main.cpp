@@ -39,7 +39,7 @@ Rainmeter rainmeter;
 Anemometer anemometer;
 RiverMonitor riverMonitor;
 
-Reporting reporting(&atmosphere, &rainmeter, &anemometer);
+Reporting reporting(&atmosphere, &rainmeter, &anemometer, &riverMonitor);
 WeatherWebServer webServer(&atmosphere, &rainmeter, &anemometer, &riverMonitor);
 
 unsigned long lastHeartbeatMs = 0;

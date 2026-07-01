@@ -56,8 +56,9 @@ String floatParam(double v, int decimals) {
 }
 } // namespace
 
-Reporting::Reporting(Atmosphere *atm, Rainmeter *rain, Anemometer *wind)
-    : atm_(atm), rain_(rain), wind_(wind), mqtt_(net_) {}
+Reporting::Reporting(Atmosphere *atm, Rainmeter *rain, Anemometer *wind,
+                     RiverMonitor *river)
+    : atm_(atm), rain_(rain), wind_(wind), river_(river), mqtt_(net_) {}
 
 void Reporting::begin() {
     loadPersisted();
@@ -71,7 +72,7 @@ void Reporting::begin() {
     //    does not drop the idle TLS connection.
     //  - socket timeout: a stalled TLS connect must not approach the 30 s
     //    hardware watchdog.
-    mqtt_.setBufferSize(512);
+    mqtt_.setBufferSize(1024);
     mqtt_.setKeepAlive(60);
     mqtt_.setSocketTimeout(15);
     // Route incoming command-topic messages to onMqttMessage(). PubSubClient on
@@ -80,9 +81,17 @@ void Reporting::begin() {
         [this](char *topic, uint8_t *payload, unsigned int length) {
             this->onMqttMessage(topic, payload, length);
         });
+    // Unique client ID = base + lower 32 bits of the chip MAC (stable across
+    // reboots, but distinct from the legacy Go station's "weather-mqtt-client").
+    // A shared client ID makes the broker kick one connection when the other
+    // (re)connects, which silently drops published messages.
+    char idbuf[48];
+    snprintf(idbuf, sizeof(idbuf), "%s-%08X", MqttClientId,
+             (uint32_t)ESP.getEfuseMac());
+    clientId_ = idbuf;
     lastMinuteMs_ = millis();
-    Serial.printf("Reporting ready (rainMM=%.2f rainDayIn=%.3f)\n", v_.rainMM,
-                  v_.rainDayIn);
+    Serial.printf("Reporting ready (rainMM=%.2f rainDayIn=%.3f) mqttId=%s\n",
+                  v_.rainMM, v_.rainDayIn, clientId_.c_str());
 }
 
 void Reporting::loadPersisted() {
@@ -144,9 +153,9 @@ bool Reporting::mqttReconnect() {
     // typically require this); fall back to anonymous connect otherwise.
     bool ok;
     if (strlen(MQTT_USERNAME) > 0) {
-        ok = mqtt_.connect(MqttClientId, MQTT_USERNAME, MQTT_PASSWORD);
+        ok = mqtt_.connect(clientId_.c_str(), MQTT_USERNAME, MQTT_PASSWORD);
     } else {
-        ok = mqtt_.connect(MqttClientId);
+        ok = mqtt_.connect(clientId_.c_str());
     }
     if (ok) {
         Serial.println("connected");
@@ -175,13 +184,15 @@ void Reporting::publishMqtt() {
     snprintf(timeStr, sizeof(timeStr), "%02d:%02d:%02d %02d/%02d/%04d", lt.tm_hour,
              lt.tm_min, lt.tm_sec, lt.tm_mday, lt.tm_mon + 1, lt.tm_year + 1900);
 
-    char payload[256];
+    char payload[320];
     snprintf(payload, sizeof(payload),
              "{\"name\":\"%s\",\"ip_address\":\"%s\",\"time\":\"%s\","
              "\"rain\":\"%.2f\",\"temp\":\"%.2f\",\"windspeed\":\"%.2f\","
-             "\"windgust\":\"%.2f\",\"winddir\":\"%.2f\",\"humidity\":\"%.2f\"}",
+             "\"windgust\":\"%.2f\",\"winddir\":\"%.2f\",\"humidity\":\"%.2f\","
+             "\"rain_mm_hr\":\"%.2f\",\"river_level\":\"%.3f\"}",
              MqttClientName, ip.c_str(), timeStr, v_.rainMM, v_.tempC,
-             v_.windSpeedMph, v_.windGustMph, v_.windDir, v_.humidity);
+             v_.windSpeedMph, v_.windGustMph, v_.windDir, v_.humidity,
+             rain_ ? rain_->getRate() : 0.0f, river_ ? river_->level() : 0.0f);
 
     if (mqtt_.publish(MqttTopic, payload)) {
         Serial.printf("MQTT published to %s\n", MqttTopic);
@@ -393,23 +404,25 @@ void Reporting::handleCommand(String cmd) {
 void Reporting::publishStatus() {
     String ip = net::ip().toString();
 
-    char payload[480];
+    char payload[640];
     snprintf(
         payload, sizeof(payload),
         "{\"id\":\"%s\",\"ip\":\"%s\",\"rssi\":%d,\"uptime_s\":%lu,"
         "\"heap\":%u,\"version\":\"%s\",\"recovery\":%s,"
-        "\"atmosphere\":%s,\"rain\":%s,\"wind\":%s,"
+        "\"atmosphere\":%s,\"rain\":%s,\"wind\":%s,\"river\":%s,"
         "\"temp\":%.2f,\"humidity\":%.2f,\"pressure\":%.2f,"
         "\"windspeed\":%.2f,\"windgust\":%.2f,\"winddir\":%.2f,"
-        "\"rain_mm_hr\":%.2f,\"rain_day\":%.3f}",
+        "\"rain_mm_hr\":%.2f,\"river_level\":%.3f,\"rain_day\":%.3f}",
         MqttStationId, ip.c_str(), net::rssi(), millis() / 1000UL,
         (unsigned)ESP.getFreeHeap(), _SEMVER_CORE,
         recoveryMode_ ? "true" : "false",
         (atm_ && atm_->isOnline()) ? "true" : "false",
         (rain_ && rain_->isOnline()) ? "true" : "false",
-        (wind_ && wind_->isOnline()) ? "true" : "false", v_.tempC, v_.humidity,
-        v_.pressureHpa, v_.windSpeedMph, v_.windGustMph, v_.windDir,
+        (wind_ && wind_->isOnline()) ? "true" : "false",
+        (river_ && river_->lastScrapeSuccess()) ? "true" : "false", v_.tempC,
+        v_.humidity, v_.pressureHpa, v_.windSpeedMph, v_.windGustMph, v_.windDir,
         rain_ ? rain_->getRate() : 0.0f,
+        river_ ? river_->level() : 0.0f,
         rain_ ? rain_->getDayAccumulation() : 0.0f);
 
     if (mqtt_.publish(MqttStatusTopic, payload)) {

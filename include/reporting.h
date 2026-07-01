@@ -9,6 +9,7 @@
 #include "anemometer.h"
 #include "atmosphere.h"
 #include "rainmeter.h"
+#include "river.h"
 
 // Computed weather values — mirrors the Go `weatherData` struct populated by
 // prepData() in weather/reporting.go. Shared by MQTT (Phase 7), the HTTP/metrics
@@ -40,7 +41,8 @@ struct WeatherValues {
 // reset at 09:00 local time.
 class Reporting {
 public:
-    Reporting(Atmosphere *atm, Rainmeter *rain, Anemometer *wind);
+    Reporting(Atmosphere *atm, Rainmeter *rain, Anemometer *wind,
+              RiverMonitor *river);
 
     // Load persisted rain totals and configure the MQTT client.
     void begin();
@@ -77,6 +79,7 @@ private:
     Atmosphere *atm_;
     Rainmeter *rain_;
     Anemometer *wind_;
+    RiverMonitor *river_;
 
     WiFiClientSecure net_;
     PubSubClient mqtt_;
@@ -87,4 +90,10 @@ private:
     unsigned long lastMinuteMs_ = 0;
     unsigned long lastBeaconMs_ = 0;
     unsigned long lastReconnectMs_ = 0;
+
+    // Unique-per-device MQTT client ID (base name + chip MAC suffix). The
+    // broker allows only one connection per client ID, so a shared/static ID
+    // collides with the legacy Go station (or a second board) and the two kick
+    // each other off. Built once in begin().
+    String clientId_;
 };

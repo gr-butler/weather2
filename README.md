@@ -88,7 +88,9 @@ CA certificate ([include/mqtt_ca_cert.h](include/mqtt_ca_cert.h)).
   "windspeed": "0.00",
   "windgust": "0.00",
   "winddir": "0.00",
-  "humidity": "0.00"
+  "humidity": "0.00",
+  "rain_mm_hr": "0.00",
+  "river_level": "0.000"
 }
 ```
 
@@ -137,6 +139,7 @@ unit without a physical visit, then `resume` or `reset`.
   "atmosphere": true,
   "rain": true,
   "wind": true,
+  "river": true,
   "temp": 0.00,
   "humidity": 0.00,
   "pressure": 0.00,
@@ -144,6 +147,7 @@ unit without a physical visit, then `resume` or `reset`.
   "windgust": 0.00,
   "winddir": 0.00,
   "rain_mm_hr": 0.00,
+  "river_level": 0.000,
   "rain_day": 0.000
 }
 ```
