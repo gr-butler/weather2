@@ -242,7 +242,9 @@ scrape_configs:
 
 ## Reporting schedule
 
-- **Every minute:** refresh sensor values, publish to `culverhay/weather`.
+- **Every 30 seconds:** refresh sensor values, publish a **retained** message to
+  `culverhay/weather` (so the mobile app gets the latest reading immediately on
+  subscribe).
 - **Every 15 minutes (`ReportFreqMin`):** upload to WOW MetOffice + persist rain
   totals to NVS.
 - **09:00 local:** reset the daily rain total (WOW 9am–9am convention).

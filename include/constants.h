@@ -38,9 +38,15 @@ constexpr float MmToInch = 25.4f;     // mm  -> inches (divide mm by this)
 // --- Reporting ----------------------------------------------------------
 // WOW MetOffice / DB / persistence interval (minutes). Matches env.ReportFreqMin.
 // NOTE: the Go reference publishes MQTT every minute (its loop ticks once a
-// minute); only the WOW/DB/persist work is gated on ReportFreqMin. We mirror
-// that here — MQTT publishes every minute, WOW/persist every ReportFreqMin.
+// minute); only the WOW/DB/persist work is gated on ReportFreqMin. Here the
+// data topic is published every MqttPublishIntervalMs (retained), while the
+// WOW/persist work stays gated on ReportFreqMin.
 constexpr int ReportFreqMin = 15;
+
+// MQTT data-topic publish cadence. Published as a retained message every 30 s so
+// the mobile app receives the latest reading immediately on (re)subscribe
+// instead of waiting for the next update.
+constexpr unsigned long MqttPublishIntervalMs = 30000;
 
 // MQTT — these MUST NOT change (consumed by downstream dashboards).
 constexpr const char *MqttTopic = "culverhay/weather";       // AGENTS.md Rule 1

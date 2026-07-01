@@ -68,8 +68,13 @@ void Reporting::begin() {
     // PubSubClient tuning (see Waterbutt reference project):
     //  - larger TX/RX buffer: the JSON payload + topic + header exceeds the
     //    256-byte default headroom comfortably.
-    //  - keepalive: we only publish once a minute, so PING the broker so it
-    //    does not drop the idle TLS connection.
+    //  - keepalive (60 s): PubSubClient sends a PINGREQ once the keepalive
+    //    elapses and then drops the link itself (state -4) if the PINGRESP is
+    //    not *read* before the next check. Blocking TLS HTTP fetches (river
+    //    poll, WOW upload) can starve mqtt_.loop() for 15-30 s, so a 30 s
+    //    keepalive left no margin and the client kept timing out its own ping.
+    //    60 s (matching the stable sibling projects) tolerates a full blocking
+    //    fetch without dropping.
     //  - socket timeout: a stalled TLS connect must not approach the 30 s
     //    hardware watchdog.
     mqtt_.setBufferSize(1024);
@@ -90,6 +95,7 @@ void Reporting::begin() {
              (uint32_t)ESP.getEfuseMac());
     clientId_ = idbuf;
     lastMinuteMs_ = millis();
+    lastPublishMs_ = millis();
     Serial.printf("Reporting ready (rainMM=%.2f rainDayIn=%.3f) mqttId=%s\n",
                   v_.rainMM, v_.rainDayIn, clientId_.c_str());
 }
@@ -194,7 +200,7 @@ void Reporting::publishMqtt() {
              v_.windSpeedMph, v_.windGustMph, v_.windDir, v_.humidity,
              rain_ ? rain_->getRate() : 0.0f, river_ ? river_->level() : 0.0f);
 
-    if (mqtt_.publish(MqttTopic, payload)) {
+    if (mqtt_.publish(MqttTopic, payload, /*retained=*/true)) {
         Serial.printf("MQTT published to %s\n", MqttTopic);
     } else {
         Serial.println("MQTT publish failed");
@@ -268,14 +274,32 @@ void Reporting::service() {
     // Keep the MQTT connection serviced on every loop iteration so inbound
     // command-topic messages are processed promptly.
     unsigned long now = millis();
-    if (mqtt_.connected()) {
+    bool connected = mqtt_.connected();
+    if (connected) {
         mqtt_.loop();
-    } else if (now - lastReconnectMs_ >= MqttReconnectIntervalMs) {
-        // Throttled, non-blocking reconnect. Runs independently of the
-        // per-minute tick so command/control survives even in recovery mode.
-        lastReconnectMs_ = now;
-        mqttReconnect();
+        // loop() can drop the link itself on a keepalive ping timeout
+        // (state -4, MQTT_CONNECTION_TIMEOUT) — the broker never sends a close.
+        // Detect that in-pass transition here, otherwise the reason is lost
+        // (wasConnected_ would already be false by the next iteration).
+        if (!mqtt_.connected()) {
+            Serial.printf("MQTT connection lost in loop (state=%d)\n",
+                          mqtt_.state());
+        }
+    } else {
+        // Log the reason exactly once per drop so we can tell a broker-initiated
+        // close (state -3, MQTT_CONNECTION_LOST) from a client ping timeout
+        // (state -4, MQTT_CONNECTION_TIMEOUT) rather than guessing.
+        if (wasConnected_) {
+            Serial.printf("MQTT connection lost (state=%d)\n", mqtt_.state());
+        }
+        if (now - lastReconnectMs_ >= MqttReconnectIntervalMs) {
+            // Throttled, non-blocking reconnect. Runs independently of the
+            // per-minute tick so command/control survives even in recovery mode.
+            lastReconnectMs_ = now;
+            mqttReconnect();
+        }
     }
+    wasConnected_ = mqtt_.connected();
 
     // Periodic presence beacon (IP + command topic), like the Waterbutt node.
     if (mqtt_.connected() && now - lastBeaconMs_ >= MqttBeaconIntervalMs) {
@@ -288,19 +312,23 @@ void Reporting::service() {
         return;
     }
 
+    // --- data publish (retained, every MqttPublishIntervalMs) ---
+    if (now - lastPublishMs_ >= MqttPublishIntervalMs) {
+        lastPublishMs_ += MqttPublishIntervalMs; // catches up if delayed
+        prepData();
+        if (mqtt_.connected()) {
+            publishMqtt();
+        } else {
+            Serial.println("MQTT client is not connected");
+        }
+    }
+
+    // The WOW upload + rain reset stay on the once-per-minute wall clock; the
+    // data publish above runs on its own faster cadence.
     if (now - lastMinuteMs_ < 60000UL) {
         return;
     }
     lastMinuteMs_ += 60000UL; // advance one minute (catches up if delayed)
-
-    // --- per-minute work ---
-    prepData();
-
-    if (mqtt_.connected()) {
-        publishMqtt();
-    } else {
-        Serial.println("MQTT client is not connected");
-    }
 
     // --- wall-clock-gated work (needs a valid NTP time) ---
     time_t tnow = time(nullptr);

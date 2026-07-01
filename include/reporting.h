@@ -34,11 +34,11 @@ struct WeatherValues {
 
 // Reporting — ported from weather/reporting.go + the MQTT setup in main.go.
 //
-// Scheduling mirrors the Go reference: the work runs once per minute. Every
-// minute prepData() refreshes the values and an MQTT message is published to
-// `culverhay/weather`. The WOW MetOffice upload, DB write (n/a here) and NVS
-// persistence happen every ReportFreqMin (15) minutes. The daily rain total is
-// reset at 09:00 local time.
+// The data topic `culverhay/weather` is published as a retained message every
+// MqttPublishIntervalMs (30 s) so the mobile app gets the latest reading
+// immediately on subscribe. prepData() refreshes the values before each publish.
+// The WOW MetOffice upload, DB write (n/a here) and NVS persistence happen every
+// ReportFreqMin (15) minutes. The daily rain total is reset at 09:00 local time.
 class Reporting {
 public:
     Reporting(Atmosphere *atm, Rainmeter *rain, Anemometer *wind,
@@ -87,7 +87,9 @@ private:
     WeatherValues v_;
 
     bool recoveryMode_ = false;
+    bool wasConnected_ = false; // tracks MQTT link state for drop-reason logging
     unsigned long lastMinuteMs_ = 0;
+    unsigned long lastPublishMs_ = 0;
     unsigned long lastBeaconMs_ = 0;
     unsigned long lastReconnectMs_ = 0;
 
