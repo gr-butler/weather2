@@ -59,3 +59,27 @@ constexpr unsigned long MqttReconnectIntervalMs = 15000; // throttle reconnect a
 // --- LEDs / heartbeat ---------------------------------------------------
 constexpr unsigned long LEDFlashDurationMs = 50; // matches env.LEDFlashDuration
 constexpr unsigned long HeartbeatIntervalMs = 60000; // heartbeat flash every 60 s
+
+// --- River monitor ------------------------------------------------------
+// Ported from the riverMonitor Go reference: poll the UK Environment Agency
+// flood-monitoring API and expose the level/period as Prometheus metrics.
+// Station id is a build flag (RIVER_STATION_ID) so it can be overridden per
+// deployment; it defaults to the reference station (53125).
+#ifndef RIVER_STATION_ID
+#define RIVER_STATION_ID 53125
+#endif
+#define RIVER_STR_HELPER(x) #x
+#define RIVER_STR(x) RIVER_STR_HELPER(x)
+
+// Full measures endpoint for the configured station (matches the Go default).
+constexpr const char *RiverApiUrl =
+    "https://environment.data.gov.uk/flood-monitoring/id/stations/" RIVER_STR(
+        RIVER_STATION_ID) "/measures";
+
+// API poll interval — matches the Go reference default (-poll-interval 7m).
+constexpr unsigned long RiverPollIntervalMs = 7UL * 60UL * 1000UL;
+
+// HTTP timeouts for the river API fetch (ms). Kept well under the 30 s
+// hardware watchdog so a stalled request cannot panic-reboot the device.
+constexpr unsigned long RiverHttpConnectTimeoutMs = 10000;
+constexpr unsigned long RiverHttpTimeoutMs = 15000;

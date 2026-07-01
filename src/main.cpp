@@ -11,6 +11,7 @@
 #include "net.h"
 #include "rainmeter.h"
 #include "reporting.h"
+#include "river.h"
 #include "secrets.h"
 #include "version.h"
 #include "webserver.h"
@@ -36,9 +37,10 @@ Led rainTipLed;
 Atmosphere atmosphere;
 Rainmeter rainmeter;
 Anemometer anemometer;
+RiverMonitor riverMonitor;
 
 Reporting reporting(&atmosphere, &rainmeter, &anemometer);
-WeatherWebServer webServer(&atmosphere, &rainmeter, &anemometer);
+WeatherWebServer webServer(&atmosphere, &rainmeter, &anemometer, &riverMonitor);
 
 unsigned long lastHeartbeatMs = 0;
 
@@ -99,6 +101,9 @@ void setup() {
 
     reporting.begin();
 
+    // River monitor: polls the Environment Agency flood API (needs network).
+    riverMonitor.begin();
+
     // Web service: live JSON (/) + Prometheus (/metrics), plus OTA at /update.
     webServer.begin();
     ElegantOTA.begin(&webServer.server());
@@ -132,6 +137,12 @@ void loop() {
     // the per-minute publish + 15-min WOW upload + 09:00 rain reset are gated
     // internally on recovery mode.
     reporting.service();
+
+    // River monitor: fetch the Environment Agency river level on its own poll
+    // schedule (every 7 min). Suspended in recovery mode like the sensors.
+    if (!reporting.isRecoveryMode()) {
+        riverMonitor.service();
+    }
 
     // Heartbeat LED every 60 s (matches the Go reference).
     unsigned long now = millis();

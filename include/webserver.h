@@ -5,6 +5,7 @@
 #include "anemometer.h"
 #include "atmosphere.h"
 #include "rainmeter.h"
+#include "river.h"
 
 // HTTP endpoints — ported from weather/main.go.
 //
@@ -23,7 +24,8 @@
 // server().
 class WeatherWebServer {
 public:
-    WeatherWebServer(Atmosphere *atm, Rainmeter *rain, Anemometer *wind);
+    WeatherWebServer(Atmosphere *atm, Rainmeter *rain, Anemometer *wind,
+                     RiverMonitor *river);
 
     // Register routes and start the async HTTP server on port 80.
     void begin();
@@ -43,4 +45,5 @@ private:
     Atmosphere *atm_;
     Rainmeter *rain_;
     Anemometer *wind_;
+    RiverMonitor *river_;
 };

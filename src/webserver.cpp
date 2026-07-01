@@ -5,8 +5,8 @@
 // Ported from the HTTP handler + Prometheus metrics in weather/main.go.
 
 WeatherWebServer::WeatherWebServer(Atmosphere *atm, Rainmeter *rain,
-                                   Anemometer *wind)
-    : server_(80), atm_(atm), rain_(rain), wind_(wind) {}
+                                   Anemometer *wind, RiverMonitor *river)
+    : server_(80), atm_(atm), rain_(rain), wind_(wind), river_(river) {}
 
 void WeatherWebServer::begin() {
     server_.on("/", HTTP_GET,
@@ -94,5 +94,38 @@ void WeatherWebServer::handleMetrics(AsyncWebServerRequest *request) {
         pressure, rainRate, rainDay, humidity, tempC, windSpeed, windGust,
         windDir);
 
-    request->send(200, "text/plain; version=0.0.4", buf);
+    // River metrics — names preserved from the riverMonitor Go reference so
+    // existing Prometheus/Grafana dashboards keep working. Appended to the same
+    // exposition body via a second buffer.
+    double riverLevel = river_ ? river_->level() : 0.0;
+    double riverPeriod = river_ ? river_->period() : 0.0;
+    double riverScrapeOk = (river_ && river_->lastScrapeSuccess()) ? 1.0 : 0.0;
+    unsigned long riverSuccesses = river_ ? river_->fetchSuccesses() : 0;
+    unsigned long riverErrors = river_ ? river_->fetchErrors() : 0;
+
+    char riverBuf[640];
+    snprintf(
+        riverBuf, sizeof(riverBuf),
+        "# HELP riverlevel River level in meters.\n"
+        "# TYPE riverlevel gauge\n"
+        "riverlevel %.4f\n"
+        "# HELP period River period.\n"
+        "# TYPE period gauge\n"
+        "period %.4f\n"
+        "# HELP river_monitor_api_fetch_errors_total Total API fetch or parse errors.\n"
+        "# TYPE river_monitor_api_fetch_errors_total counter\n"
+        "river_monitor_api_fetch_errors_total %lu\n"
+        "# HELP river_monitor_api_fetch_success_total Total successful API fetches.\n"
+        "# TYPE river_monitor_api_fetch_success_total counter\n"
+        "river_monitor_api_fetch_success_total %lu\n"
+        "# HELP river_monitor_last_scrape_success 1 if the last scrape succeeded, otherwise 0.\n"
+        "# TYPE river_monitor_last_scrape_success gauge\n"
+        "river_monitor_last_scrape_success %.0f\n",
+        riverLevel, riverPeriod, riverErrors, riverSuccesses, riverScrapeOk);
+
+    AsyncResponseStream *response =
+        request->beginResponseStream("text/plain; version=0.0.4");
+    response->print(buf);
+    response->print(riverBuf);
+    request->send(response);
 }

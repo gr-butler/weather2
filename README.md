@@ -185,6 +185,21 @@ unit without a physical visit, then `resume` or `reset`.
 | `windgust`             | gauge   | mph           |
 | `winddirection`        | gauge   | degrees       |
 
+#### River metrics (ported from the `riverMonitor` reference — names locked)
+
+The device also polls the UK Environment Agency flood-monitoring API (station
+`RIVER_STATION_ID`, default `53125`) every 7 minutes and exposes the result on
+the same `/metrics` endpoint. Names match the `riverMonitor` Go service so
+existing Prometheus/Grafana dashboards keep working.
+
+| Metric                                   | Type    | Unit / meaning              |
+|------------------------------------------|---------|-----------------------------|
+| `riverlevel`                             | gauge   | metres                      |
+| `period`                                 | gauge   | measurement period          |
+| `river_monitor_api_fetch_errors_total`   | counter | total fetch/parse errors    |
+| `river_monitor_api_fetch_success_total`  | counter | total successful fetches    |
+| `river_monitor_last_scrape_success`      | gauge   | 1 = last scrape OK, else 0  |
+
 ## Reporting schedule
 
 - **Every minute:** refresh sensor values, publish to `culverhay/weather`.
@@ -203,6 +218,7 @@ unit without a physical visit, then `resume` or `reset`.
 | `src/anemometer.cpp`       | CAN/TWAI wind ingestion |
 | `src/atmosphere.cpp`       | MCP9808 + BME280 |
 | `src/rainmeter.cpp`        | Rain bucket + tip LED |
+| `src/river.cpp`            | Environment Agency river-level poller (Prometheus) |
 | `include/constants.h`      | All tunable constants + topic names |
 | `include/*.h`              | Pure logic (buffer, wind maths, conversions) |
 | `docs/MASTHEAD_CAN_SPEC.md`| CAN frame contract for the remote wind node |
