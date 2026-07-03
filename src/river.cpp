@@ -6,6 +6,8 @@
 
 #include "constants.h"
 #include "net.h"
+#include "weblog.h"
+#define Serial Log // capture Serial output for the /logs web view
 
 // Ported from riverMonitor/main.go (fetchAndUpdate + parseRiverData + pollLoop).
 // Ingestion path differs (ESP32 HTTPClient vs Go net/http) but the selection

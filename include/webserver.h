@@ -40,6 +40,8 @@ public:
 private:
     void handleRoot(AsyncWebServerRequest *request);
     void handleMetrics(AsyncWebServerRequest *request);
+    void handleLogsPage(AsyncWebServerRequest *request);
+    void handleLogsJson(AsyncWebServerRequest *request);
 
     AsyncWebServer server_;
     Atmosphere *atm_;

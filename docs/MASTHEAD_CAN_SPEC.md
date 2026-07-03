@@ -41,19 +41,29 @@ matter to the receiver.
 |-----------------|------------|----------------------------------------------------------|
 | CAN ID          | **`0x100`**| `WIND_CAN_ID`. Standard 11-bit. Receiver drops all others.|
 | RTR             | **0**      | Data frame only. Remote-transmit-request frames are ignored.|
-| DLC (length)    | **3 bytes**| `WIND_FRAME_DLC`. Frames shorter than 3 bytes are discarded.|
+| DLC (length)    | **7 bytes**| `WIND_FRAME_DLC`. Frames shorter than 3 bytes (`WIND_FRAME_MIN_DLC`) are discarded.|
 
-### 2.2 Payload layout (3 bytes)
+### 2.2 Payload layout (7 bytes)
 
 | Byte | Field         | Type     | Endianness     | Meaning                                          |
 |------|---------------|----------|----------------|--------------------------------------------------|
 | 0    | `pulse_count` | `uint8`  | —              | Anemometer pulses since the **previous** frame.  |
 | 1    | `adc_raw` LSB | `uint16` | little-endian  | Wind-direction vane ADC counts (low byte).       |
 | 2    | `adc_raw` MSB | `uint16` | little-endian  | Wind-direction vane ADC counts (high byte).      |
+| 3–6  | `seq`         | `uint32` | little-endian  | Frame counter; resets to 0 on masthead boot.     |
 
 `adc_raw = data[1] | (data[2] << 8)` — **little-endian** (low byte first).
+`seq = data[3] | (data[4]<<8) | (data[5]<<16) | (data[6]<<24)` — **little-endian**.
 
-Any extra bytes (DLC > 3) are ignored; send DLC = 3.
+The `seq` counter increments by 1 per transmitted frame and **resets to 0 when
+the masthead boots**. This lets the receiver tell apart:
+- **lost frames** on the bus — `seq` jumps forward by more than 1; and
+- a **masthead reboot** — `seq` jumps *backwards* to ~0.
+
+It is diagnostic only: it does not affect the wind-speed/gust/direction maths. A
+32-bit width means no practical wrap (≈ 34 years at 4 Hz), so a backward jump
+always means a reboot. Frames with DLC 3–6 (no `seq`) are still accepted for
+backward compatibility; the receiver simply skips the lost/reboot detection.
 
 ---
 

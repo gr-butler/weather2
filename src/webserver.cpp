@@ -2,6 +2,9 @@
 
 #include <time.h>
 
+#include "weblog.h"
+#define Serial Log // capture Serial output for the /logs web view
+
 // Ported from the HTTP handler + Prometheus metrics in weather/main.go.
 
 WeatherWebServer::WeatherWebServer(Atmosphere *atm, Rainmeter *rain,
@@ -13,8 +16,12 @@ void WeatherWebServer::begin() {
                [this](AsyncWebServerRequest *r) { handleRoot(r); });
     server_.on("/metrics", HTTP_GET,
                [this](AsyncWebServerRequest *r) { handleMetrics(r); });
+    server_.on("/logs", HTTP_GET,
+               [this](AsyncWebServerRequest *r) { handleLogsPage(r); });
+    server_.on("/logs.json", HTTP_GET,
+               [this](AsyncWebServerRequest *r) { handleLogsJson(r); });
     server_.begin();
-    Serial.println("HTTP server started on :80 (/ and /metrics)");
+    Serial.println("HTTP server started on :80 (/, /metrics, /logs)");
 }
 
 // GET / — live JSON payload (mirrors the Go `webdata` struct + handler).
@@ -129,3 +136,107 @@ void WeatherWebServer::handleMetrics(AsyncWebServerRequest *request) {
     response->print(riverBuf);
     request->send(response);
 }
+
+// GET /logs.json?after=<seq> — new log lines since the given sequence number.
+void WeatherWebServer::handleLogsJson(AsyncWebServerRequest *request) {
+    uint32_t after = 0;
+    if (request->hasParam("after")) {
+        after = static_cast<uint32_t>(
+            strtoul(request->getParam("after")->value().c_str(), nullptr, 10));
+    }
+    request->send(200, "application/json", Log.jsonSince(after));
+}
+
+// GET /logs — self-contained live log viewer that polls /logs.json.
+void WeatherWebServer::handleLogsPage(AsyncWebServerRequest *request) {
+    static const char kPage[] PROGMEM = R"HTML(<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>weather2 logs</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; font-family: system-ui, sans-serif; background: #0b0f14; color: #d7dde5; }
+  header { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap;
+           padding: .6rem .9rem; background: #131a22; border-bottom: 1px solid #223; position: sticky; top: 0; }
+  header h1 { font-size: 1rem; margin: 0; font-weight: 600; }
+  header .grow { flex: 1; }
+  header label { font-size: .85rem; display: inline-flex; gap: .3rem; align-items: center; }
+  button, input[type=text] { background: #1c2530; color: #d7dde5; border: 1px solid #33404f;
+           border-radius: 6px; padding: .35rem .6rem; font-size: .85rem; }
+  button:hover { background: #263143; cursor: pointer; }
+  #status { font-size: .8rem; color: #8b97a5; }
+  #log { padding: .5rem .9rem; font-family: ui-monospace, Menlo, Consolas, monospace;
+         font-size: .82rem; line-height: 1.4; white-space: pre-wrap; word-break: break-word; }
+  #log div { border-bottom: 1px solid #10161d; padding: 1px 0; }
+  #log div:nth-child(odd) { background: #0e141b; }
+</style>
+</head>
+<body>
+<header>
+  <h1>weather2 &middot; live log</h1>
+  <span id="status">connecting…</span>
+  <span class="grow"></span>
+  <input id="filter" type="text" placeholder="filter…" autocomplete="off">
+  <label><input id="auto" type="checkbox" checked> autoscroll</label>
+  <button id="pause">Pause</button>
+  <button id="clear">Clear</button>
+</header>
+<div id="log"></div>
+<script>
+  const logEl = document.getElementById('log');
+  const statusEl = document.getElementById('status');
+  const autoEl = document.getElementById('auto');
+  const filterEl = document.getElementById('filter');
+  const pauseBtn = document.getElementById('pause');
+  let after = 0, paused = false, filter = '';
+
+  filterEl.addEventListener('input', () => {
+    filter = filterEl.value.toLowerCase();
+    for (const div of logEl.children) {
+      div.style.display = (!filter || div.textContent.toLowerCase().includes(filter)) ? '' : 'none';
+    }
+  });
+  document.getElementById('clear').onclick = () => { logEl.innerHTML = ''; };
+  pauseBtn.onclick = () => {
+    paused = !paused;
+    pauseBtn.textContent = paused ? 'Resume' : 'Pause';
+  };
+
+  function append(lines) {
+    const atBottom = autoEl.checked;
+    const frag = document.createDocumentFragment();
+    for (const l of lines) {
+      const div = document.createElement('div');
+      div.textContent = l.t;
+      if (filter && !l.t.toLowerCase().includes(filter)) div.style.display = 'none';
+      frag.appendChild(div);
+    }
+    logEl.appendChild(frag);
+    while (logEl.children.length > 1000) logEl.removeChild(logEl.firstChild);
+    if (atBottom) window.scrollTo(0, document.body.scrollHeight);
+  }
+
+  async function poll() {
+    if (!paused) {
+      try {
+        const r = await fetch('/logs.json?after=' + after);
+        const d = await r.json();
+        if (d.seq < after) after = 0;      // device rebooted — resync
+        if (d.lines && d.lines.length) { append(d.lines); }
+        after = d.seq;
+        statusEl.textContent = 'live · ' + new Date().toLocaleTimeString();
+      } catch (e) {
+        statusEl.textContent = 'disconnected — retrying…';
+      }
+    }
+    setTimeout(poll, 1000);
+  }
+  poll();
+</script>
+</body>
+</html>)HTML";
+    request->send(200, "text/html", kPage);
+}
+

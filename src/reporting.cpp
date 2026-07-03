@@ -10,6 +10,8 @@
 #include "net.h"
 #include "secrets.h"
 #include "version.h"
+#include "weblog.h"
+#define Serial Log // capture Serial output for the /logs web view
 
 // Ported from weather/reporting.go (prepData + Reporting loop + WOW upload) and
 // the MQTT setup in weather/main.go. See reporting.h for the scheduling model.
@@ -391,7 +393,10 @@ void Reporting::handleCommand(String cmd) {
     cmd.toLowerCase();
 
     if (cmd == "status") {
-        publishStatus();
+        prepData();
+        if (mqtt_.connected()) {
+            publishMqtt();
+        }
     } else if (cmd == "report" || cmd == "report-now") {
         mqtt_.publish(MqttStatusTopic, "reporting now");
         forceReport();

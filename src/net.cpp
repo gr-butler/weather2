@@ -6,6 +6,8 @@
 #endif
 
 #include "secrets.h"
+#include "weblog.h"
+#define Serial Log // capture Serial output for the /logs web view
 
 // =============================================================================
 //  Ethernet-primary / WiFi-fallback networking for the Olimex ESP32-POE.

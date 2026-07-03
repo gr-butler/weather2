@@ -1,5 +1,8 @@
 #include "rainmeter.h"
 
+#include "weblog.h"
+#define Serial Log // capture Serial output for the /logs web view
+
 // Ported from weather/sensors/Rainmeter.go.
 
 Rainmeter *Rainmeter::instance_ = nullptr;

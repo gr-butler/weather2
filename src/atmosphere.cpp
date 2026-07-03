@@ -4,6 +4,9 @@
 #include <Wire.h>
 #include <math.h>
 
+#include "weblog.h"
+#define Serial Log // capture Serial output for the /logs web view
+
 // Ported from weather/sensors/Atmosphere.go.
 
 bool Atmosphere::begin() {

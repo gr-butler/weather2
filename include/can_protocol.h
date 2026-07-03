@@ -21,7 +21,14 @@ constexpr uint32_t WIND_CAN_ID = 0x100;
 // Wind frame payload layout:
 //   Byte 0    : pulse_count (uint8)  — pulses since last frame (<= 25 expected)
 //   Bytes 1-2 : adc_raw     (uint16) — wind-direction ADC counts (little-endian)
-constexpr uint8_t WIND_FRAME_DLC = 3;
+//   Bytes 3-6 : seq         (uint32) — frame counter, little-endian. Resets to 0
+//               on masthead boot; lets us distinguish lost frames (counter jumps
+//               forward) from a masthead reboot (counter resets to ~0).
+constexpr uint8_t WIND_FRAME_DLC = 7;
+
+// Minimum payload length carrying valid wind data (pulse + ADC). Frames without
+// the appended sequence counter are still decoded (seq reported as 0).
+constexpr uint8_t WIND_FRAME_MIN_DLC = 3;
 
 // Maximum plausible pulse count per frame; above this the value is treated as
 // an error and clamped to 0 (mirrors the Go reference pulseCount > 25 check).
@@ -49,16 +56,28 @@ inline float windAdcToVolts(uint16_t counts) {
 struct WindFrame {
     uint8_t pulseCount; // pulses since last frame
     uint16_t adcRaw;    // wind-direction ADC counts
+    uint32_t seq;       // frame counter; resets to 0 on masthead boot
+    bool hasSeq;        // true if the frame carried the sequence counter
 };
 
 // Decode a raw CAN payload into a WindFrame. Returns false if the payload is
-// too short to contain a valid frame.
+// too short to contain valid wind data.
 inline bool decodeWindFrame(const uint8_t *data, uint8_t len, WindFrame &out) {
-    if (data == nullptr || len < WIND_FRAME_DLC) {
+    if (data == nullptr || len < WIND_FRAME_MIN_DLC) {
         return false;
     }
     out.pulseCount = data[0];
     out.adcRaw = static_cast<uint16_t>(data[1]) |
                  (static_cast<uint16_t>(data[2]) << 8);
+    if (len >= WIND_FRAME_DLC) {
+        out.seq = static_cast<uint32_t>(data[3]) |
+                  (static_cast<uint32_t>(data[4]) << 8) |
+                  (static_cast<uint32_t>(data[5]) << 16) |
+                  (static_cast<uint32_t>(data[6]) << 24);
+        out.hasSeq = true;
+    } else {
+        out.seq = 0;
+        out.hasSeq = false;
+    }
     return true;
 }

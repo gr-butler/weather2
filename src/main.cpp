@@ -14,7 +14,9 @@
 #include "river.h"
 #include "secrets.h"
 #include "version.h"
+#include "weblog.h"
 #include "webserver.h"
+#define Serial Log // capture Serial output for the /logs web view
 
 // =============================================================================
 //  Weather Station — ESP32 main loop.
@@ -127,9 +129,8 @@ void loop() {
     // In recovery mode we suspend all sensor processing and keep only MQTT
     // (command/control) + OTA alive, so the device stays remotely reachable.
     if (!reporting.isRecoveryMode()) {
-        // Sensor servicing — must run often to keep the 4 Hz wind buffer and the
-        // per-minute rain bookkeeping accurate.
-        anemometer.update();
+        // Rain bookkeeping. Wind (CAN) is serviced by its own core-0 task, so
+        // it keeps running even here and needs no per-loop servicing.
         rainmeter.update();
     }
 
