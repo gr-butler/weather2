@@ -93,6 +93,13 @@ private:
     unsigned long lastBeaconMs_ = 0;
     unsigned long lastReconnectMs_ = 0;
 
+    // Daily rain reset bookkeeping. lastRainResetYday_ is the tm_yday on which
+    // the 09:00 reset last fired; rainResetInit_ guards the boot case (adopt the
+    // persisted day total when we power up already past 09:00). Edge-triggered
+    // on the day so a drifted/delayed per-minute tick can't skip the reset.
+    int lastRainResetYday_ = -1;
+    bool rainResetInit_ = false;
+
     // Unique-per-device MQTT client ID (base name + chip MAC suffix). The
     // broker allows only one connection per client ID, so a shared/static ID
     // collides with the legacy Go station (or a second board) and the two kick

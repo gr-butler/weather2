@@ -340,14 +340,32 @@ void Reporting::service() {
     struct tm lt;
     localtime_r(&tnow, &lt);
 
-    // Reset the daily rain total at 09:00 (WOW MetOffice 9am-9am convention).
-    if (lt.tm_hour == 9 && lt.tm_min == 0) {
-        Serial.println("Resetting daily rain accumulation");
-        if (rain_) {
-            rain_->resetDayAccumulation();
+    // Reset the daily rain total once per day at/after 09:00 local time (WOW
+    // MetOffice 9am-9am convention). Edge-triggered on day-of-year rather than
+    // matching the exact 09:00 minute: the per-minute gate above rides on
+    // millis() (not the wall clock), so it drifts and can skip the single
+    // tm_min==0 window entirely — which would silently miss the reset for the
+    // whole day.
+    if (lt.tm_hour >= 9) {
+        if (!rainResetInit_) {
+            // First valid-clock pass after boot and it is already past 09:00:
+            // today's reset happened before we powered up. Adopt the persisted
+            // day total instead of wiping it.
+            rainResetInit_ = true;
+            lastRainResetYday_ = lt.tm_yday;
+        } else if (lastRainResetYday_ != lt.tm_yday) {
+            Serial.println("Resetting daily rain accumulation");
+            if (rain_) {
+                rain_->resetDayAccumulation();
+            }
+            v_.rainDayIn = 0.0;
+            lastRainResetYday_ = lt.tm_yday;
+            savePersisted();
         }
-        v_.rainDayIn = 0.0;
-        savePersisted();
+    } else {
+        // Before 09:00: mark init done so the first >=09:00 pass on the new day
+        // triggers a real reset (last reset belongs to the previous day).
+        rainResetInit_ = true;
     }
 
     // Every ReportFreqMin minutes: WOW upload + persist.
