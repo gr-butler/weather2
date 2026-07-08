@@ -41,6 +41,13 @@ Rainmeter rainmeter;
 Anemometer anemometer;
 RiverMonitor riverMonitor;
 
+// DISABLE_RAIN_PIN=1 keeps the rain meter fully initialised (all buffer/rate
+// logic runs) but never attaches the interrupt, so the pin is never read and
+// the tip count is guaranteed to stay 0. Defaults to enabled (pin read).
+#ifndef DISABLE_RAIN_PIN
+#define DISABLE_RAIN_PIN 0
+#endif
+
 Reporting reporting(&atmosphere, &rainmeter, &anemometer, &riverMonitor);
 WeatherWebServer webServer(&atmosphere, &rainmeter, &anemometer, &riverMonitor);
 
@@ -87,11 +94,16 @@ void setup() {
     } else {
         Serial.println("  Atmosphere: OFFLINE (continuing without it)");
     }
+#if DISABLE_RAIN_PIN
+    rainmeter.begin(RAIN_PIN, &rainTipLed, /*readPin=*/false);
+    Serial.println("  Rain: online (PIN DISABLED — interrupt not attached, no input)");
+#else
     if (rainmeter.begin(RAIN_PIN, &rainTipLed)) {
         Serial.println("  Rain: online");
     } else {
         Serial.println("  Rain: OFFLINE (continuing without it)");
     }
+#endif
     if (anemometer.begin()) {
         Serial.println("  Wind (CAN): online");
     } else {

@@ -94,11 +94,13 @@ private:
     unsigned long lastReconnectMs_ = 0;
 
     // Daily rain reset bookkeeping. lastRainResetYday_ is the tm_yday on which
-    // the 09:00 reset last fired; rainResetInit_ guards the boot case (adopt the
-    // persisted day total when we power up already past 09:00). Edge-triggered
-    // on the day so a drifted/delayed per-minute tick can't skip the reset.
+    // the 09:00 reset last fired. It is PERSISTED to NVS so a reboot near/after
+    // 09:00 (e.g. NTP locking after 9am) still resets today if it hasn't yet,
+    // and a midday reboot correctly keeps the already-reset day total.
     int lastRainResetYday_ = -1;
-    bool rainResetInit_ = false;
+    // One-shot: log the local time the first time the per-minute gate sees a
+    // valid NTP clock (covers late background SNTP syncs that syncTime() misses).
+    bool clockLoggedOnce_ = false;
 
     // Unique-per-device MQTT client ID (base name + chip MAC suffix). The
     // broker allows only one connection per client ID, so a shared/static ID

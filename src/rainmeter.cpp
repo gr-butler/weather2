@@ -1,5 +1,6 @@
 #include "rainmeter.h"
 
+#include "rain_math.h"
 #include "weblog.h"
 #define Serial Log // capture Serial output for the /logs web view
 
@@ -7,17 +8,24 @@
 
 Rainmeter *Rainmeter::instance_ = nullptr;
 
-bool Rainmeter::begin(uint8_t pin, Led *led) {
+bool Rainmeter::begin(uint8_t pin, Led *led, bool readPin) {
     pin_ = pin;
     led_ = led;
     instance_ = this;
+    pinEnabled_ = readPin;
 
-    pinMode(pin_, INPUT_PULLUP);
-    attachInterrupt(digitalPinToInterrupt(pin_), isrTrampoline, FALLING);
+    // When readPin is false the whole meter still initialises and all the
+    // per-minute bookkeeping / buffer logic keeps running — we just never wire
+    // up the interrupt, so the pin is never read and the tip count stays 0.
+    if (pinEnabled_) {
+        pinMode(pin_, INPUT_PULLUP);
+        attachInterrupt(digitalPinToInterrupt(pin_), isrTrampoline, FALLING);
+    }
 
     lastMinuteMs_ = millis();
     online_ = true;
-    Serial.println("Rain sensor online");
+    Serial.println(pinEnabled_ ? "Rain sensor online"
+                              : "Rain sensor online (pin disabled — no input)");
     return online_;
 }
 
@@ -28,36 +36,56 @@ void IRAM_ATTR Rainmeter::isrTrampoline() {
 }
 
 void IRAM_ATTR Rainmeter::handleTip() {
-    // Software debounce: ignore repeated edges within RainDebounceRepeatMs,
-    // mirroring the Go gpioutil.Debounce(10ms glitch, 500ms repeat) settings.
+    // The ISR does NOT count the tip. It only records a candidate falling edge;
+    // update() confirms the input is still LOW after RainDebounceGlitchMs before
+    // counting, which rejects noise spikes (e.g. an input held at the supply
+    // rail). This mirrors the Go gpioutil.Debounce(10ms glitch, 500ms repeat).
     unsigned long now = millis();
     portENTER_CRITICAL_ISR(&mux_);
-    if (now - lastTipMs_ >= RainDebounceRepeatMs) {
-        lastTipMs_ = now;
-        rainTipMinute_ += 1;     // for rate
-        dayAccumulation_ += 1;   // for day total
-        accumulationSince_ += 1; // for since-last-report accumulation
-        tipFlashPending_ = true;
+    // Ignore edges that arrive within the repeat window of the last candidate.
+    if (now - lastEdgeMs_ >= RainDebounceRepeatMs) {
+        lastEdgeMs_ = now;
+        pendingTipMs_ = now;
+        tipConfirmPending_ = true;
     }
     portEXIT_CRITICAL_ISR(&mux_);
 }
 
 void Rainmeter::update() {
-    // Flash the tip LED outside the ISR.
-    bool flash = false;
+    unsigned long now = millis();
+
+    // Confirm a candidate tip once the glitch window has elapsed. A genuine
+    // bucket tip holds the reed switch closed (input LOW) well beyond the glitch
+    // window; a noise spike will already have returned HIGH and is discarded.
+    bool confirm = false;
     portENTER_CRITICAL(&mux_);
-    if (tipFlashPending_) {
-        tipFlashPending_ = false;
-        flash = true;
+    if (tipConfirmPending_ && (now - pendingTipMs_ >= RainDebounceGlitchMs)) {
+        tipConfirmPending_ = false;
+        confirm = true;
     }
     portEXIT_CRITICAL(&mux_);
-    if (flash && led_ != nullptr) {
-        led_->flash();
+
+    if (confirm) {
+        if (digitalRead(pin_) == LOW) {
+            uint32_t dayTips;
+            portENTER_CRITICAL(&mux_);
+            rainTipMinute_ += 1;     // for rate
+            dayAccumulation_ += 1;   // for day total
+            accumulationSince_ += 1; // for since-last-report accumulation
+            dayTips = dayAccumulation_;
+            portEXIT_CRITICAL(&mux_);
+            Serial.printf("Rain tip detected: +%.4f mm (day total %.2f mm)\n", MmPerTip,
+                          MmPerTip * static_cast<float>(dayTips));
+            if (led_ != nullptr) {
+                led_->flash();
+            }
+        } else {
+            Serial.println("Rain tip rejected: input HIGH after debounce (glitch/noise)");
+        }
     }
 
     // Once per minute, push the minute's tip count into the rolling buffer and
     // reset the per-minute counter (matches the Go time.Tick(time.Minute) loop).
-    unsigned long now = millis();
     if (now - lastMinuteMs_ >= 60000UL) {
         lastMinuteMs_ += 60000UL;
         uint32_t tips;
@@ -70,8 +98,7 @@ void Rainmeter::update() {
 }
 
 float Rainmeter::getRate() {
-    BufferStats s = tipBuf_.getAverageMinMaxSum();
-    return MmPerTip * static_cast<float>(s.sum);
+    return static_cast<float>(rainRateMmPerHour(tipBuf_));
 }
 
 float Rainmeter::getDayAccumulation() {
@@ -79,7 +106,7 @@ float Rainmeter::getDayAccumulation() {
     portENTER_CRITICAL(&mux_);
     day = dayAccumulation_;
     portEXIT_CRITICAL(&mux_);
-    return MmPerTip * static_cast<float>(day);
+    return static_cast<float>(rainMmFromTips(day));
 }
 
 void Rainmeter::resetDayAccumulation() {
@@ -94,5 +121,5 @@ float Rainmeter::getAccumulation() {
     a = accumulationSince_;
     accumulationSince_ = 0;
     portEXIT_CRITICAL(&mux_);
-    return MmPerTip * static_cast<float>(a);
+    return static_cast<float>(rainMmFromTips(a));
 }

@@ -90,6 +90,7 @@ CA certificate ([include/mqtt_ca_cert.h](include/mqtt_ca_cert.h)).
   "winddir": "0.00",
   "humidity": "0.00",
   "rain_mm_hr": "0.00",
+  "rain_day": "0.00",
   "river_level": "0.000"
 }
 ```
@@ -97,6 +98,11 @@ CA certificate ([include/mqtt_ca_cert.h](include/mqtt_ca_cert.h)).
 > All data-payload field names are consumed by downstream dashboards and **must
 > not change** (AGENTS.md Rule 1). Values are 2-dp strings, matching the Go
 > reference `dataMap`.
+>
+> Rain fields: `rain` is the rainfall (mm) accumulated **since the last WOW
+> report** (cleared on each successful upload, ~every 15 min — mirrors the Go
+> `RainMM` / WOW `rainin`). `rain_mm_hr` is the last-hour rate (mm/hr).
+> `rain_day` is the running **9am–9am day total** (mm).
 
 ### Control plane
 

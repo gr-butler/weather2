@@ -22,6 +22,7 @@ constexpr const char *kPrefsNamespace = "weather";
 constexpr const char *kKeyRainMM = "rainMM";
 constexpr const char *kKeyRainIn = "rainIn";
 constexpr const char *kKeyRainDayIn = "rainDayIn";
+constexpr const char *kKeyRainResetYday = "rainRstYd"; // tm_yday of the last 09:00 reset
 
 // Only trust wall-clock decisions (09:00 reset, ReportFreqMin gating) once NTP
 // has set the clock — before then time() returns a 1970 epoch.
@@ -107,6 +108,7 @@ void Reporting::loadPersisted() {
     v_.rainMM = prefs_.getDouble(kKeyRainMM, 0.0);
     v_.rainIn = prefs_.getDouble(kKeyRainIn, 0.0);
     v_.rainDayIn = prefs_.getDouble(kKeyRainDayIn, 0.0);
+    lastRainResetYday_ = prefs_.getInt(kKeyRainResetYday, -1);
     prefs_.end();
 }
 
@@ -115,6 +117,7 @@ void Reporting::savePersisted() {
     prefs_.putDouble(kKeyRainMM, v_.rainMM);
     prefs_.putDouble(kKeyRainIn, v_.rainIn);
     prefs_.putDouble(kKeyRainDayIn, v_.rainDayIn);
+    prefs_.putInt(kKeyRainResetYday, lastRainResetYday_);
     prefs_.end();
 }
 
@@ -192,15 +195,16 @@ void Reporting::publishMqtt() {
     snprintf(timeStr, sizeof(timeStr), "%02d:%02d:%02d %02d/%02d/%04d", lt.tm_hour,
              lt.tm_min, lt.tm_sec, lt.tm_mday, lt.tm_mon + 1, lt.tm_year + 1900);
 
-    char payload[320];
+    char payload[360];
     snprintf(payload, sizeof(payload),
              "{\"name\":\"%s\",\"ip_address\":\"%s\",\"time\":\"%s\","
              "\"rain\":\"%.2f\",\"temp\":\"%.2f\",\"windspeed\":\"%.2f\","
              "\"windgust\":\"%.2f\",\"winddir\":\"%.2f\",\"humidity\":\"%.2f\","
-             "\"rain_mm_hr\":\"%.2f\",\"river_level\":\"%.3f\"}",
+             "\"rain_mm_hr\":\"%.2f\",\"rain_day\":\"%.2f\",\"river_level\":\"%.3f\"}",
              MqttClientName, ip.c_str(), timeStr, v_.rainMM, v_.tempC,
              v_.windSpeedMph, v_.windGustMph, v_.windDir, v_.humidity,
-             rain_ ? rain_->getRate() : 0.0f, river_ ? river_->level() : 0.0f);
+             rain_ ? rain_->getRate() : 0.0f, rain_ ? rain_->getDayAccumulation() : 0.0f,
+             river_ ? river_->level() : 0.0f);
 
     if (mqtt_.publish(MqttTopic, payload, /*retained=*/true)) {
         Serial.printf("MQTT published to %s\n", MqttTopic);
@@ -247,10 +251,14 @@ void Reporting::sendToWow() {
 
 #ifdef WOW_DRY_RUN
     // Dev/bench build: the readings are not real weather, so never POST to the
-    // Met Office. Log the URL that would have been sent and leave the rain
-    // totals untouched (a real upload only clears them on HTTP 200).
+    // Met Office. Log the URL that would have been sent, but still clear the
+    // since-last-report rain totals exactly as a successful (HTTP 200) upload
+    // would — otherwise rainMM/rainIn (and the MQTT "rain" field) grow without
+    // bound on the bench and stop matching production behaviour.
     Serial.print("WOW dry-run (not sending): ");
     Serial.println(url);
+    v_.rainMM = 0.0;
+    v_.rainIn = 0.0;
     return;
 #endif
 
@@ -339,33 +347,31 @@ void Reporting::service() {
     }
     struct tm lt;
     localtime_r(&tnow, &lt);
+    if (!clockLoggedOnce_) {
+        clockLoggedOnce_ = true;
+        char tbuf[32];
+        strftime(tbuf, sizeof(tbuf), "%Y-%m-%d %H:%M:%S", &lt);
+        Serial.printf("NTP clock valid (first minute-tick): %s (yday=%d, lastRainResetYday=%d, "
+                      "rainDay=%.2f mm)\n",
+                      tbuf, lt.tm_yday, lastRainResetYday_,
+                      rain_ ? rain_->getDayAccumulation() : 0.0f);
+    }
 
     // Reset the daily rain total once per day at/after 09:00 local time (WOW
-    // MetOffice 9am-9am convention). Edge-triggered on day-of-year rather than
-    // matching the exact 09:00 minute: the per-minute gate above rides on
-    // millis() (not the wall clock), so it drifts and can skip the single
-    // tm_min==0 window entirely — which would silently miss the reset for the
-    // whole day.
-    if (lt.tm_hour >= 9) {
-        if (!rainResetInit_) {
-            // First valid-clock pass after boot and it is already past 09:00:
-            // today's reset happened before we powered up. Adopt the persisted
-            // day total instead of wiping it.
-            rainResetInit_ = true;
-            lastRainResetYday_ = lt.tm_yday;
-        } else if (lastRainResetYday_ != lt.tm_yday) {
-            Serial.println("Resetting daily rain accumulation");
-            if (rain_) {
-                rain_->resetDayAccumulation();
-            }
-            v_.rainDayIn = 0.0;
-            lastRainResetYday_ = lt.tm_yday;
-            savePersisted();
+    // MetOffice 9am-9am convention). lastRainResetYday_ is PERSISTED, so the
+    // reset fires whenever we are past 09:00 on a day whose reset hasn't
+    // happened yet — even if the device rebooted shortly before 09:00 and NTP
+    // only locked after 09:00 (previously that boot case adopted the stale day
+    // total and silently skipped the reset for the whole day).
+    if (lt.tm_hour >= 9 && lastRainResetYday_ != lt.tm_yday) {
+        Serial.printf("Resetting daily rain accumulation (yday %d -> %d)\n", lastRainResetYday_,
+                      lt.tm_yday);
+        if (rain_) {
+            rain_->resetDayAccumulation();
         }
-    } else {
-        // Before 09:00: mark init done so the first >=09:00 pass on the new day
-        // triggers a real reset (last reset belongs to the previous day).
-        rainResetInit_ = true;
+        v_.rainDayIn = 0.0;
+        lastRainResetYday_ = lt.tm_yday;
+        savePersisted();
     }
 
     // Every ReportFreqMin minutes: WOW upload + persist.
