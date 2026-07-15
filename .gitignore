@@ -4,3 +4,7 @@
 .vscode/launch.json
 .vscode/ipch
 private.ini
+
+# Python bytecode
+__pycache__/
+*.pyc
