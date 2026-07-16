@@ -11,6 +11,7 @@
 #include "net.h"
 #include "rainmeter.h"
 #include "reporting.h"
+#include "reset_reason.h"
 #include "river.h"
 #include "secrets.h"
 #include "version.h"
@@ -73,6 +74,18 @@ void syncTime() {
         Serial.println("\nNTP sync failed — wall-clock features deferred");
     }
 }
+
+// Log why the ESP32 just booted — power-on / deliberate reboot vs an abnormal
+// crash, brownout or watchdog. Printed first thing in setup() so the cause of
+// any unexpected restart is always visible in the serial log and the /logs view.
+void logResetReason() {
+    if (bootReasonAbnormal()) {
+        Serial.printf("*** Reset reason: %s  <-- ABNORMAL RESTART ***\n",
+                      bootReasonString());
+    } else {
+        Serial.printf("Reset reason: %s\n", bootReasonString());
+    }
+}
 } // namespace
 
 void setup() {
@@ -80,6 +93,7 @@ void setup() {
     delay(2000);
     Serial.flush();
     Serial.printf("\n\nStarting weather station [%s]\n", _VERSION);
+    logResetReason();
 
     // LEDs first so we get visible startup feedback.
     heartbeatLed.begin("Heartbeat LED", HEARTBEAT_LED_PIN);

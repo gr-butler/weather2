@@ -13,6 +13,9 @@
 //                   match the Go struct tags exactly (AGENTS.md Rule 1):
 //                   time, hiResTemp_C, humidity_RH, pressure_hPa, rain_mm_hr,
 //                   rain_rate, rain_day, wind_dir, wind_speed, wind_gust
+//                   Plus an additive `status` object with per-sensor health
+//                   flags (pressure_humidity, temperature, wind, rain, river);
+//                   true = active/working, false = inactive/not working.
 //   GET /metrics -> Prometheus text format. Metric names/units MUST match the
 //                   Go gauge definitions exactly (AGENTS.md Rule 1):
 //                   atmospheric_pressure, rain_min_rate, rain_day,

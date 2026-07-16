@@ -100,6 +100,25 @@ void begin() {
     Serial.println("Starting Ethernet (Olimex ESP32-POE LAN8720)...");
     ETH.begin(ETH_PHY_ADDR, ETH_POWER_PIN, ETH_MDC_PIN, ETH_MDIO_PIN, kEthType,
               kEthClk);
+#ifdef ETH_STATIC_IP
+    // Static addressing (production): pin the station to a fixed IP so the
+    // Prometheus scrape target and MQTT clients always find it. Applied right
+    // after ETH.begin(); if any address is malformed or config fails we fall
+    // back to DHCP rather than ending up unreachable.
+    {
+        IPAddress ip, gw, mask, dns1, dns2;
+        if (ip.fromString(ETH_STATIC_IP) && gw.fromString(ETH_GATEWAY) &&
+            mask.fromString(ETH_SUBNET) && dns1.fromString(ETH_DNS1) &&
+            dns2.fromString(ETH_DNS2) &&
+            ETH.config(ip, gw, mask, dns1, dns2)) {
+            Serial.printf("ETH static IP: %s mask %s gw %s dns %s/%s\n",
+                          ETH_STATIC_IP, ETH_SUBNET, ETH_GATEWAY, ETH_DNS1,
+                          ETH_DNS2);
+        } else {
+            Serial.println("ETH static config FAILED — falling back to DHCP");
+        }
+    }
+#endif
 #else
     Serial.println("Ethernet disabled (WiFi-only build)");
 #endif

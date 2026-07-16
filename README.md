@@ -89,6 +89,7 @@ CA certificate ([include/mqtt_ca_cert.h](include/mqtt_ca_cert.h)).
   "windgust": "0.00",
   "winddir": "0.00",
   "humidity": "0.00",
+  "pressure": "0.00",
   "rain_mm_hr": "0.00",
   "rain_day": "0.00",
   "river_level": "0.000"
@@ -141,6 +142,7 @@ unit without a physical visit, then `resume` or `reset`.
   "uptime_s": 1234,
   "heap": 123456,
   "version": "1.2.3",
+  "boot_reason": "power-on",
   "recovery": false,
   "atmosphere": true,
   "rain": true,
@@ -179,9 +181,21 @@ unit without a physical visit, then `resume` or `reset`.
   "rain_day": 0.00,
   "wind_dir": 0.00,
   "wind_speed": 0.00,
-  "wind_gust": 0.00
+  "wind_gust": 0.00,
+  "status": {
+    "pressure_humidity": true,
+    "temperature": true,
+    "wind": true,
+    "rain": true,
+    "river": true
+  }
 }
 ```
+
+The `status` object reports each sensor's live health — `true` = active/working,
+`false` = inactive/not working. `pressure_humidity` and `temperature` come from
+the atmospheric sensors (BME280 / MCP9808), `wind` is the masthead CAN node,
+`rain` is the tipping-bucket meter, and `river` reflects the last EA API scrape.
 
 ### `GET /metrics` (Prometheus — names locked, AGENTS.md Rule 1)
 

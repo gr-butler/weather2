@@ -37,6 +37,16 @@ void WeatherWebServer::handleRoot(AsyncWebServerRequest *request) {
     double windSpeed = wind_ ? wind_->getSpeed() : 0.0;
     double windGust = wind_ ? wind_->getGust() : 0.0;
 
+    // Per-sensor health (active/working vs inactive/not working). Additive to
+    // the payload — existing field names/units are unchanged (AGENTS.md Rule 1).
+    // river uses the last-scrape result so a stale-but-initialised monitor still
+    // shows a fault when the API stops responding.
+    bool phOk = atm_ && atm_->hasPressureHumidity();
+    bool tempOk = atm_ && atm_->hasTemperature();
+    bool windOk = wind_ && wind_->isOnline();
+    bool rainOk = rain_ && rain_->isOnline();
+    bool riverOk = river_ && river_->lastScrapeSuccess();
+
     // Go uses time.RFC822 = "02 Jan 06 15:04 MST".
     char timeStr[40];
     time_t tnow = time(nullptr);
@@ -46,14 +56,18 @@ void WeatherWebServer::handleRoot(AsyncWebServerRequest *request) {
 
     // rain_rate mirrors the Go handler, which leaves webdata.RainRate unset (0);
     // only rain_mm_hr (GetRate) and rain_day (GetDayAccumulation) are populated.
-    char body[320];
+    char body[512];
     snprintf(body, sizeof(body),
              "{\"time\":\"%s\",\"hiResTemp_C\":%.2f,\"humidity_RH\":%.2f,"
              "\"pressure_hPa\":%.2f,\"rain_mm_hr\":%.2f,\"rain_rate\":%.2f,"
              "\"rain_day\":%.2f,\"wind_dir\":%.2f,\"wind_speed\":%.2f,"
-             "\"wind_gust\":%.2f}",
+             "\"wind_gust\":%.2f,"
+             "\"status\":{\"pressure_humidity\":%s,\"temperature\":%s,"
+             "\"wind\":%s,\"rain\":%s,\"river\":%s}}",
              timeStr, tempC, humidity, pressure, rainHr, 0.0, rainDay, windDir,
-             windSpeed, windGust);
+             windSpeed, windGust, phOk ? "true" : "false",
+             tempOk ? "true" : "false", windOk ? "true" : "false",
+             rainOk ? "true" : "false", riverOk ? "true" : "false");
 
     request->send(200, "application/json", body);
 }

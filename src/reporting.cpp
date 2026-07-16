@@ -8,6 +8,7 @@
 #include "conversions.h"
 #include "mqtt_ca_cert.h"
 #include "net.h"
+#include "reset_reason.h"
 #include "secrets.h"
 #include "version.h"
 #include "weblog.h"
@@ -195,15 +196,17 @@ void Reporting::publishMqtt() {
     snprintf(timeStr, sizeof(timeStr), "%02d:%02d:%02d %02d/%02d/%04d", lt.tm_hour,
              lt.tm_min, lt.tm_sec, lt.tm_mday, lt.tm_mon + 1, lt.tm_year + 1900);
 
-    char payload[360];
+    char payload[384];
     snprintf(payload, sizeof(payload),
              "{\"name\":\"%s\",\"ip_address\":\"%s\",\"time\":\"%s\","
              "\"rain\":\"%.2f\",\"temp\":\"%.2f\",\"windspeed\":\"%.2f\","
              "\"windgust\":\"%.2f\",\"winddir\":\"%.2f\",\"humidity\":\"%.2f\","
-             "\"rain_mm_hr\":\"%.2f\",\"rain_day\":\"%.2f\",\"river_level\":\"%.3f\"}",
+             "\"pressure\":\"%.2f\",\"rain_mm_hr\":\"%.2f\",\"rain_day\":\"%.2f\","
+             "\"river_level\":\"%.3f\"}",
              MqttClientName, ip.c_str(), timeStr, v_.rainMM, v_.tempC,
              v_.windSpeedMph, v_.windGustMph, v_.windDir, v_.humidity,
-             rain_ ? rain_->getRate() : 0.0f, rain_ ? rain_->getDayAccumulation() : 0.0f,
+             v_.pressureHpa, rain_ ? rain_->getRate() : 0.0f,
+             rain_ ? rain_->getDayAccumulation() : 0.0f,
              river_ ? river_->level() : 0.0f);
 
     if (mqtt_.publish(MqttTopic, payload, /*retained=*/true)) {
@@ -465,13 +468,13 @@ void Reporting::publishStatus() {
     snprintf(
         payload, sizeof(payload),
         "{\"id\":\"%s\",\"ip\":\"%s\",\"rssi\":%d,\"uptime_s\":%lu,"
-        "\"heap\":%u,\"version\":\"%s\",\"recovery\":%s,"
+        "\"heap\":%u,\"version\":\"%s\",\"boot_reason\":\"%s\",\"recovery\":%s,"
         "\"atmosphere\":%s,\"rain\":%s,\"wind\":%s,\"river\":%s,"
         "\"temp\":%.2f,\"humidity\":%.2f,\"pressure\":%.2f,"
         "\"windspeed\":%.2f,\"windgust\":%.2f,\"winddir\":%.2f,"
         "\"rain_mm_hr\":%.2f,\"river_level\":%.3f,\"rain_day\":%.3f}",
         MqttStationId, ip.c_str(), net::rssi(), millis() / 1000UL,
-        (unsigned)ESP.getFreeHeap(), _SEMVER_CORE,
+        (unsigned)ESP.getFreeHeap(), _SEMVER_CORE, bootReasonString(),
         recoveryMode_ ? "true" : "false",
         (atm_ && atm_->isOnline()) ? "true" : "false",
         (rain_ && rain_->isOnline()) ? "true" : "false",
