@@ -124,7 +124,7 @@ void WeatherWebServer::handleMetrics(AsyncWebServerRequest *request) {
     unsigned long riverSuccesses = river_ ? river_->fetchSuccesses() : 0;
     unsigned long riverErrors = river_ ? river_->fetchErrors() : 0;
 
-    char riverBuf[640];
+    char riverBuf[1024];
     snprintf(
         riverBuf, sizeof(riverBuf),
         "# HELP riverlevel River level in meters.\n"
