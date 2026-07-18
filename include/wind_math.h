@@ -36,6 +36,50 @@ inline double windSpeedMph(SampleBuffer &speedBuf) {
     return speed;
 }
 
+// Speed over the most recent window: mean pulses/sample in that window,
+// converted to mph using the same constants/clamps as GetSpeed().
+inline double windSpeedMphLastWindow(SampleBuffer &speedBuf, int windowSamples) {
+    int size = 0;
+    int position = 0;
+    std::vector<double> data = speedBuf.getRawData(size, position);
+    if (size <= 0) {
+        return 0.0;
+    }
+
+    int window = windowSamples;
+    if (window < 1) {
+        window = 1;
+    }
+    if (window > size) {
+        window = size;
+    }
+
+    int index = position - window;
+    if (index < 0) {
+        index += size;
+    }
+
+    double sum = 0.0;
+    for (int i = 0; i < window; i++) {
+        sum += data[index];
+        index += 1;
+        if (index == size) {
+            index = 0;
+        }
+    }
+
+    double avg = sum / static_cast<double>(window);
+    double ticksPerSec = avg * WindSamplesPerSecond;
+    if (ticksPerSec < 0) {
+        ticksPerSec = 0;
+    }
+    double speed = MphPerTick * ticksPerSec;
+    if (speed > WindSpeedMaxMph) {
+        speed = 0;
+    }
+    return speed;
+}
+
 // GetGust(): "the maximum three second average wind speed occurring in any
 // period". Slides a 3-second window (WindSamplesPerSecond * 3 samples) across
 // the whole buffer and takes the maximum sum.
@@ -58,6 +102,50 @@ inline double windGustMph(SampleBuffer &gustBuf, double &lastGust) {
             threeSecMax = x;
         }
     }
+    double val = (threeSecMax / threeSecond) * MphPerTick;
+    if (val > WindGustMaxMph) {
+        val = lastGust;
+    }
+    lastGust = val;
+    return val;
+}
+
+// Gust over the most recent window: peak 3-second average inside that window.
+inline double windGustMphLastWindow(SampleBuffer &gustBuf, int windowSamples,
+                                    double &lastGust) {
+    constexpr int threeSecond = 3;
+    int size = 0;
+    int position = 0;
+    std::vector<double> data = gustBuf.getRawData(size, position);
+    if (size <= 0) {
+        return lastGust;
+    }
+
+    int window = windowSamples;
+    if (window < 1) {
+        window = 1;
+    }
+    if (window > size) {
+        window = size;
+    }
+
+    const int gustWindow = WindSamplesPerSecond * threeSecond;
+    int start = position - window;
+    if (start < 0) {
+        start += size;
+    }
+
+    double threeSecMax = 0.0;
+    for (int i = 0; i < window; i++) {
+        double x = 0.0;
+        for (int j = 0; j < gustWindow; j++) {
+            x += data[windWrappedIndex(start + i + j, size)];
+        }
+        if (x > threeSecMax) {
+            threeSecMax = x;
+        }
+    }
+
     double val = (threeSecMax / threeSecond) * MphPerTick;
     if (val > WindGustMaxMph) {
         val = lastGust;

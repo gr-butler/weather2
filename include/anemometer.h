@@ -56,6 +56,13 @@ public:
         return windDirectionRolling(
             dirBuf_, WindSamplesPerSecond * WindDirectionAverageSeconds);
     }
+    void getAppWindSummary(double &dirDeg, double &speedMph, double &gustMph) {
+        MutexGuard g(mutex_);
+        const int window = WindSamplesPerSecond * AppWindSummarySeconds;
+        dirDeg = windDirectionRolling(dirBuf_, window);
+        speedMph = windSpeedMphLastWindow(speedBuf_, window);
+        gustMph = windGustMphLastWindow(gustBuf_, window, lastAppGust_);
+    }
     const char *getDirectionString() const { return dirStr_; }
     bool isOnline() const { return online_; }
 
@@ -87,6 +94,7 @@ private:
     SampleBuffer dirBuf_;
 
     double lastGust_ = 0.0;
+    double lastAppGust_ = 0.0;
     const char *dirStr_ = "N";
     double lastDirection_ = 0.0;
 

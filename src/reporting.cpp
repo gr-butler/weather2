@@ -187,6 +187,12 @@ bool Reporting::mqttReconnect() {
 // are preserved exactly from the Go dataMap (weather/reporting.go).
 void Reporting::publishMqtt() {
     String ip = net::ip().toString();
+    double appWindDir = v_.windDir;
+    double appWindSpeed = v_.windSpeedMph;
+    double appWindGust = v_.windGustMph;
+    if (wind_) {
+        wind_->getAppWindSummary(appWindDir, appWindSpeed, appWindGust);
+    }
 
     // Go time format "15:04:05 02/01/2006" => HH:MM:SS DD/MM/YYYY (local time).
     char timeStr[24];
@@ -213,6 +219,28 @@ void Reporting::publishMqtt() {
         Serial.printf("MQTT published to %s\n", MqttTopic);
     } else {
         Serial.println("MQTT publish failed");
+    }
+
+    // App-only topic: same cadence, but wind fields are smoothed over the last
+    // AppWindSummarySeconds seconds (direction circular mean, speed mean, gust
+    // peak 3-second average within that window).
+    char appPayload[448];
+    snprintf(appPayload, sizeof(appPayload),
+             "{\"name\":\"%s\",\"ip_address\":\"%s\",\"time\":\"%s\","
+             "\"rain\":\"%.2f\",\"temp\":\"%.2f\",\"windspeed\":\"%.2f\","
+             "\"windgust\":\"%.2f\",\"winddir\":\"%.2f\",\"humidity\":\"%.2f\","
+             "\"pressure\":\"%.2f\",\"rain_mm_hr\":\"%.2f\",\"rain_day\":\"%.2f\","
+             "\"river_level\":\"%.3f\",\"wind_summary_window_s\":%d}",
+             MqttClientName, ip.c_str(), timeStr, v_.rainMM, v_.tempC,
+             appWindSpeed, appWindGust, appWindDir, v_.humidity, v_.pressureHpa,
+             rain_ ? rain_->getRate() : 0.0f,
+             rain_ ? rain_->getDayAccumulation() : 0.0f,
+             river_ ? river_->level() : 0.0f, AppWindSummarySeconds);
+
+    if (mqtt_.publish(MqttAppTopic, appPayload, /*retained=*/true)) {
+        Serial.printf("MQTT published to %s\n", MqttAppTopic);
+    } else {
+        Serial.printf("MQTT publish failed for %s\n", MqttAppTopic);
     }
 }
 

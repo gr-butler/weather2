@@ -76,7 +76,8 @@ CA certificate ([include/mqtt_ca_cert.h](include/mqtt_ca_cert.h)).
 
 | Topic               | Direction | Cadence       | Payload |
 |---------------------|-----------|---------------|---------|
-| `culverhay/weather` | publish   | every 1 min   | JSON (below) |
+| `culverhay/weather` | publish   | every 30 s    | Core JSON (below) |
+| `culverhay/weather/app` | publish | every 30 s | App JSON (same shape; wind is 30 s summary) |
 
 ```json
 {
@@ -104,6 +105,15 @@ CA certificate ([include/mqtt_ca_cert.h](include/mqtt_ca_cert.h)).
 > report** (cleared on each successful upload, ~every 15 min — mirrors the Go
 > `RainMM` / WOW `rainin`). `rain_mm_hr` is the last-hour rate (mm/hr).
 > `rain_day` is the running **9am–9am day total** (mm).
+
+`culverhay/weather/app` keeps the same payload shape for app compatibility but
+uses app-facing wind values:
+- `windspeed`: mean over the last 30 s
+- `winddir`: circular mean over the last 30 s
+- `windgust`: peak 3-second average found within the last 30 s
+
+This app-only topic does not change Prometheus metrics or WOW Met Office
+reporting logic.
 
 ### Control plane
 

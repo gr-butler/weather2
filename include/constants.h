@@ -12,6 +12,7 @@ constexpr float MphPerTick = 1.429f;
 constexpr int WindSamplesPerSecond = 4;     // one sample every 250 ms
 constexpr int WindBufferLengthSeconds = 60; // 1-minute rolling window
 constexpr int WindDirectionAverageSeconds = 5; // rolling direction smoothing window
+constexpr int AppWindSummarySeconds = 30; // app-facing MQTT wind summary window
 
 // Number of slots in the wind circular buffers: 4 * 60 = 240
 constexpr int WindBufferSamples = WindSamplesPerSecond * WindBufferLengthSeconds;
@@ -51,6 +52,7 @@ constexpr unsigned long MqttPublishIntervalMs = 30000;
 
 // MQTT — these MUST NOT change (consumed by downstream dashboards).
 constexpr const char *MqttTopic = "culverhay/weather";       // AGENTS.md Rule 1
+constexpr const char *MqttAppTopic = "culverhay/weather/app"; // app-only smoothed payload
 constexpr const char *MqttClientId = "weather-mqtt-client";  // matches Go clientID
 constexpr const char *MqttClientName = "weather_station";    // Go dataMap "name"
 
