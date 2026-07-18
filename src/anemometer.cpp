@@ -149,6 +149,24 @@ void Anemometer::processFrame(const twai_message_t &msg) {
     haveDirection_ = true;
 }
 
+void Anemometer::logCanStatus(unsigned long now) {
+    if (now - lastStatusLogMs_ < 30000) {
+        return;
+    }
+    lastStatusLogMs_ = now;
+
+    if (!haveFrameEver_) {
+        Serial.println("Wind: CAN status state=waiting data=no frames=0 age_ms=n/a");
+        return;
+    }
+
+    const unsigned long ageMs = now - lastFrameMs_;
+    const bool hasRecentData = ageMs <= FrameStaleMs;
+    const char *state = ageMs >= FrameOfflineMs ? "offline" : "online";
+    Serial.printf("Wind: CAN status state=%s data=%s age_ms=%lu\n", state,
+                  hasRecentData ? "yes" : "no", ageMs);
+}
+
 void Anemometer::sampleSlot() {
     // Insert exactly one sample for the elapsed 250 ms slot. The rolling buffers
     // are read by the getters on other cores, so hold the mutex while writing.
@@ -178,10 +196,6 @@ void Anemometer::sampleSlot() {
         // Nothing heard from the masthead yet; stay offline silently.
     } else if (now - lastFrameMs_ <= FrameStaleMs) {
         online_ = true;
-        if (now - canOkLogMs_ >= 30000) {
-            canOkLogMs_ = now;
-            Serial.println("Wind: CAN stable");
-        }
     } else {
         if (now - lastMissedLogMs_ >= 5000) {
             lastMissedLogMs_ = now;
@@ -195,6 +209,8 @@ void Anemometer::sampleSlot() {
             online_ = false;
         }
     }
+
+    logCanStatus(now);
 
     // Reset the window accumulators.
     accumPulses_ = 0;

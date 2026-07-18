@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cmath>
+
 #include "buffer.h"
 #include "constants.h"
 
@@ -68,6 +70,57 @@ inline double windGustMph(SampleBuffer &gustBuf, double &lastGust) {
 inline double windDirection(SampleBuffer &dirBuf) {
     BufferStats s = dirBuf.getAverageMinMaxSum();
     return s.average;
+}
+
+// Rolling direction average over the most recent window using circular mean.
+// This avoids wrap-around errors at north (e.g. 359° + 1° should average to 0°).
+inline double windDirectionRolling(SampleBuffer &dirBuf, int windowSamples) {
+    int size = 0;
+    int position = 0;
+    std::vector<double> data = dirBuf.getRawData(size, position);
+    if (size <= 0) {
+        return 0.0;
+    }
+
+    int window = windowSamples;
+    if (window < 1) {
+        window = 1;
+    }
+    if (window > size) {
+        window = size;
+    }
+
+    int index = position - window;
+    if (index < 0) {
+        index += size;
+    }
+
+    double sinSum = 0.0;
+    double cosSum = 0.0;
+    double lastDeg = 0.0;
+    for (int i = 0; i < window; i++) {
+        double deg = data[index];
+        lastDeg = deg;
+        double rad = deg * M_PI / 180.0;
+        sinSum += std::sin(rad);
+        cosSum += std::cos(rad);
+
+        index += 1;
+        if (index == size) {
+            index = 0;
+        }
+    }
+
+    // Opposing vectors can cancel to ~0. In that ambiguous case keep last.
+    if (std::fabs(sinSum) < 1e-9 && std::fabs(cosSum) < 1e-9) {
+        return lastDeg;
+    }
+
+    double deg = std::atan2(sinSum, cosSum) * 180.0 / M_PI;
+    if (deg < 0.0) {
+        deg += 360.0;
+    }
+    return deg;
 }
 
 // voltToDegrees(): wind-vane voltage -> compass bearing. Thresholds are the

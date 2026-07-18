@@ -53,7 +53,8 @@ public:
     }
     double getDirection() {
         MutexGuard g(mutex_);
-        return windDirection(dirBuf_);
+        return windDirectionRolling(
+            dirBuf_, WindSamplesPerSecond * WindDirectionAverageSeconds);
     }
     const char *getDirectionString() const { return dirStr_; }
     bool isOnline() const { return online_; }
@@ -63,6 +64,7 @@ private:
     void taskLoop();
     void processFrame(const twai_message_t &msg);
     void sampleSlot();
+    void logCanStatus(unsigned long now);
 
     // RAII lock for the rolling-buffer mutex. A null handle (before begin())
     // is a no-op so the getters stay safe to call during startup.
@@ -96,7 +98,7 @@ private:
 
     unsigned long lastSampleMs_ = 0;
     unsigned long lastMissedLogMs_ = 0;
-    unsigned long canOkLogMs_ = 0;
+    unsigned long lastStatusLogMs_ = 0;
     unsigned long lastFrameMs_ = 0; // millis() of the last decoded CAN frame
     bool haveFrameEver_ = false;    // true once any frame has been received
     bool online_ = false;

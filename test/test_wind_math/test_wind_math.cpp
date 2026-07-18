@@ -62,7 +62,26 @@ void test_volt_to_degrees_cardinals(void) {
 void test_direction_average(void) {
     SampleBuffer dirBuf(WindBufferSamples);
     dirBuf.addItem(180.0); // prefills all slots with 180
-    TEST_ASSERT_EQUAL_DOUBLE(180.0, windDirection(dirBuf));
+    TEST_ASSERT_EQUAL_DOUBLE(
+        180.0,
+        windDirectionRolling(dirBuf,
+                             WindSamplesPerSecond * WindDirectionAverageSeconds));
+}
+
+void test_direction_rolling_wraparound(void) {
+    SampleBuffer dirBuf(WindBufferSamples);
+    dirBuf.addItem(0.0); // prefill with north
+
+    // Fill the 5 s rolling window with values around north that would break a
+    // naive linear average but should circular-average near 0 degrees.
+    for (int i = 0; i < 10; i++) {
+        dirBuf.addItem(359.0);
+        dirBuf.addItem(1.0);
+    }
+
+    double deg = windDirectionRolling(
+        dirBuf, WindSamplesPerSecond * WindDirectionAverageSeconds);
+    TEST_ASSERT_TRUE((deg <= 2.0) || (deg >= 358.0));
 }
 
 int main(int, char **) {
@@ -73,5 +92,6 @@ int main(int, char **) {
     RUN_TEST(test_gust_clamps_and_reuses_last);
     RUN_TEST(test_volt_to_degrees_cardinals);
     RUN_TEST(test_direction_average);
+    RUN_TEST(test_direction_rolling_wraparound);
     return UNITY_END();
 }

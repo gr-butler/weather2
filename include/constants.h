@@ -11,6 +11,7 @@ constexpr float MphPerTick = 1.429f;
 // https://www.metoffice.gov.uk/weather/guides/observations/how-we-measure-wind
 constexpr int WindSamplesPerSecond = 4;     // one sample every 250 ms
 constexpr int WindBufferLengthSeconds = 60; // 1-minute rolling window
+constexpr int WindDirectionAverageSeconds = 5; // rolling direction smoothing window
 
 // Number of slots in the wind circular buffers: 4 * 60 = 240
 constexpr int WindBufferSamples = WindSamplesPerSecond * WindBufferLengthSeconds;

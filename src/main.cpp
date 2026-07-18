@@ -86,6 +86,27 @@ void logResetReason() {
         Serial.printf("Reset reason: %s\n", bootReasonString());
     }
 }
+
+void logStartupConfig() {
+#ifdef USE_ETHERNET
+    constexpr const char *mode = "prod";
+    constexpr const char *network = "ethernet+wifi-fallback";
+#else
+    constexpr const char *mode = "dev";
+    constexpr const char *network = "wifi-only";
+#endif
+
+#ifdef WOW_DRY_RUN
+    constexpr const char *wowMode = "dry-run";
+#else
+    constexpr const char *wowMode = "live";
+#endif
+
+    Serial.printf(
+        "Startup config: mode=%s network=%s wow=%s rain_pin=%s can_tx=%d can_rx=%d\n",
+        mode, network, wowMode, DISABLE_RAIN_PIN ? "disabled" : "enabled",
+        (int)TX_GPIO_NUM, (int)RX_GPIO_NUM);
+}
 } // namespace
 
 void setup() {
@@ -94,6 +115,7 @@ void setup() {
     Serial.flush();
     Serial.printf("\n\nStarting weather station [%s]\n", _VERSION);
     logResetReason();
+    logStartupConfig();
 
     // LEDs first so we get visible startup feedback.
     heartbeatLed.begin("Heartbeat LED", HEARTBEAT_LED_PIN);
