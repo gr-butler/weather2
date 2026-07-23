@@ -13,7 +13,42 @@
 // Ingestion path differs (ESP32 HTTPClient vs Go net/http) but the selection
 // logic — pick the item whose latestReading is newest — is preserved.
 
+namespace {
+constexpr const char *kRiverNamespace = "river";
+constexpr const char *kKeyLevel = "level";
+constexpr const char *kKeyPeriod = "period";
+// Save at most once per hour to limit NVS flash wear.
+constexpr unsigned long kRiverSaveIntervalMs = 3600000UL;
+} // namespace
+
+void RiverMonitor::loadPersisted() {
+    prefs_.begin(kRiverNamespace, /*readOnly=*/true);
+    if (prefs_.isKey(kKeyLevel)) {
+        level_  = prefs_.getDouble(kKeyLevel,  0.0);
+        period_ = prefs_.getDouble(kKeyPeriod, 0.0);
+        hasData_ = true;
+        Serial.printf("River: loaded persisted level=%.3f period=%.3f\n",
+                      level_, period_);
+    }
+    prefs_.end();
+}
+
+void RiverMonitor::maybeSavePersisted() {
+    unsigned long now = millis();
+    if (savedThisSession_ && (now - lastSaveMs_) < kRiverSaveIntervalMs) {
+        return;
+    }
+    prefs_.begin(kRiverNamespace, /*readOnly=*/false);
+    prefs_.putDouble(kKeyLevel,  level_);
+    prefs_.putDouble(kKeyPeriod, period_);
+    prefs_.end();
+    lastSaveMs_ = now;
+    savedThisSession_ = true;
+    Serial.printf("River: persisted level=%.3f\n", level_);
+}
+
 void RiverMonitor::begin() {
+    loadPersisted();
     lastPollMs_ = millis();
     armed_ = true; // trigger an initial fetch on the first service() tick
     Serial.printf("River monitor ready (url=%s)\n", RiverApiUrl);
@@ -81,6 +116,7 @@ bool RiverMonitor::fetchAndUpdate() {
     fetchSuccesses_++;
     lastScrapeSuccess_ = true;
     Serial.printf("River level=%.3f period=%.3f\n", level_, period_);
+    maybeSavePersisted();
     return true;
 }
 

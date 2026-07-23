@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <Preferences.h>
 
 // RiverMonitor — ported from the riverMonitor Go reference (../riverMonitor).
 //
@@ -46,6 +47,11 @@ private:
     // most-recent reading. Returns false if no valid reading is present.
     bool parseRiverData(Stream &body, double &outLevel, double &outPeriod);
 
+    // NVS persistence: load last-known level on boot; save at most once per
+    // hour after each successful API fetch to limit flash wear.
+    void loadPersisted();
+    void maybeSavePersisted();
+
     double level_ = 0.0;
     double period_ = 0.0;
     bool hasData_ = false;
@@ -55,4 +61,8 @@ private:
 
     unsigned long lastPollMs_ = 0;
     bool armed_ = false; // force a fetch on the first service() after begin()
+
+    Preferences prefs_;
+    unsigned long lastSaveMs_ = 0;
+    bool savedThisSession_ = false;
 };

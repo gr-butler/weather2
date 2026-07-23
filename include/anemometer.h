@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <Preferences.h>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -43,6 +44,13 @@ public:
     // Returns false on failure.
     bool begin();
 
+    // Runtime-adjustable wind window parameters (persisted to NVS).
+    // Validated range: [1, WindBufferLengthSeconds].
+    int getDirAvgSeconds() const { return dirAvgSeconds_; }
+    int getAppSummarySeconds() const { return appSummarySeconds_; }
+    void setDirAvgSeconds(int s);
+    void setAppSummarySeconds(int s);
+
     double getSpeed() {
         MutexGuard g(mutex_);
         return windSpeedMph(speedBuf_);
@@ -53,13 +61,13 @@ public:
     }
     double getDirection() {
         MutexGuard g(mutex_);
-        return windDirectionRolling(
-            dirBuf_, WindSamplesPerSecond * WindDirectionAverageSeconds);
+        return windDirectionFiltered(
+            dirBuf_, WindSamplesPerSecond * dirAvgSeconds_);
     }
     void getAppWindSummary(double &dirDeg, double &speedMph, double &gustMph) {
         MutexGuard g(mutex_);
-        const int window = WindSamplesPerSecond * AppWindSummarySeconds;
-        dirDeg = windDirectionRolling(dirBuf_, window);
+        const int window = WindSamplesPerSecond * appSummarySeconds_;
+        dirDeg = windDirectionFiltered(dirBuf_, window);
         speedMph = windSpeedMphLastWindow(speedBuf_, window);
         gustMph = windGustMphLastWindow(gustBuf_, window, lastAppGust_);
     }
@@ -72,6 +80,8 @@ private:
     void processFrame(const twai_message_t &msg);
     void sampleSlot();
     void logCanStatus(unsigned long now);
+    void loadWindConfig();
+    void saveWindConfig();
 
     // RAII lock for the rolling-buffer mutex. A null handle (before begin())
     // is a no-op so the getters stay safe to call during startup.
@@ -88,6 +98,12 @@ private:
             }
         }
     };
+
+    // Runtime-configurable window lengths (seconds). Loaded from NVS on
+    // begin(); default to constants.h values if not previously set.
+    int dirAvgSeconds_ = WindDirectionAverageSeconds;
+    int appSummarySeconds_ = AppWindSummarySeconds;
+    Preferences windPrefs_;
 
     SampleBuffer speedBuf_;
     SampleBuffer gustBuf_;

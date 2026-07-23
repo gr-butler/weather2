@@ -10,6 +10,12 @@
 // model. Calculations live in wind_math.h (ported from Anemometer.go).
 
 namespace {
+constexpr const char *kWindCfgNamespace = "windcfg";
+constexpr const char *kKeyDirAvgSec = "dirAvgSec";
+constexpr const char *kKeyAppSumSec = "appSumSec";
+} // namespace (windcfg keys)
+
+namespace {
 constexpr unsigned long WindSampleIntervalMs = 1000 / WindSamplesPerSecond; // 250 ms
 // A CAN frame is expected every 250 ms. If none has been *decoded* within
 // FrameStaleMs the current slot is filled with 0 pulses; after FrameOfflineMs of
@@ -33,7 +39,41 @@ constexpr BaseType_t CanTaskCore = 0;
 constexpr unsigned long RxBlockMs = 20; // max sleep between sampler ticks
 } // namespace
 
+void Anemometer::loadWindConfig() {
+    windPrefs_.begin(kWindCfgNamespace, /*readOnly=*/true);
+    dirAvgSeconds_     = windPrefs_.getInt(kKeyDirAvgSec, WindDirectionAverageSeconds);
+    appSummarySeconds_ = windPrefs_.getInt(kKeyAppSumSec, AppWindSummarySeconds);
+    windPrefs_.end();
+    // Clamp to valid range in case NVS holds a stale/out-of-range value.
+    dirAvgSeconds_     = max(1, min(dirAvgSeconds_,     WindBufferLengthSeconds));
+    appSummarySeconds_ = max(1, min(appSummarySeconds_, WindBufferLengthSeconds));
+    Serial.printf("Wind config: dir_avg=%ds app_window=%ds\n",
+                  dirAvgSeconds_, appSummarySeconds_);
+}
+
+void Anemometer::saveWindConfig() {
+    windPrefs_.begin(kWindCfgNamespace, /*readOnly=*/false);
+    windPrefs_.putInt(kKeyDirAvgSec, dirAvgSeconds_);
+    windPrefs_.putInt(kKeyAppSumSec, appSummarySeconds_);
+    windPrefs_.end();
+}
+
+void Anemometer::setDirAvgSeconds(int s) {
+    s = max(1, min(s, WindBufferLengthSeconds));
+    dirAvgSeconds_ = s;
+    saveWindConfig();
+    Serial.printf("Wind dir_avg set to %ds\n", s);
+}
+
+void Anemometer::setAppSummarySeconds(int s) {
+    s = max(1, min(s, WindBufferLengthSeconds));
+    appSummarySeconds_ = s;
+    saveWindConfig();
+    Serial.printf("Wind app_window set to %ds\n", s);
+}
+
 bool Anemometer::begin() {
+    loadWindConfig();
     twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT(
         static_cast<gpio_num_t>(TX_GPIO_NUM),
         static_cast<gpio_num_t>(RX_GPIO_NUM), TWAI_MODE_NORMAL);
