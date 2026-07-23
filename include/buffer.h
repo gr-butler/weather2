@@ -107,6 +107,17 @@ public:
 
     int getSize() const { return size_; }
 
+    // Reset the buffer to a new size, discarding all existing data.
+    // Thread-safe: takes the internal lock. Used to dynamically grow the
+    // direction buffer when the user raises the smoothing window via telnet.
+    void resize(int newSize) {
+        std::lock_guard<std::mutex> guard(lock_);
+        size_     = newSize;
+        position_ = 0;
+        first_    = true;
+        data_.assign(newSize, 0.0);
+    }
+
 private:
     void addItemNoLock(double val) {
         data_[position_] = val;

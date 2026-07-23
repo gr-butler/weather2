@@ -13,6 +13,11 @@ namespace {
 constexpr const char *kWindCfgNamespace = "windcfg";
 constexpr const char *kKeyDirAvgSec = "dirAvgSec";
 constexpr const char *kKeyAppSumSec = "appSumSec";
+constexpr const char *kKeyDirBufSec = "dirBufSec";
+// Maximum direction buffer: 300 s × 4 Hz = 1200 samples ≈ 10 KB of doubles.
+// Speed and gust buffers are fixed at WindBufferSamples (240) and are not
+// resized — their size is mandated by the rolling-average maths (AGENTS.md Rule 2).
+constexpr int kDirBufMaxSeconds = 300;
 } // namespace (windcfg keys)
 
 namespace {
@@ -43,23 +48,43 @@ void Anemometer::loadWindConfig() {
     windPrefs_.begin(kWindCfgNamespace, /*readOnly=*/true);
     dirAvgSeconds_     = windPrefs_.getInt(kKeyDirAvgSec, WindDirectionAverageSeconds);
     appSummarySeconds_ = windPrefs_.getInt(kKeyAppSumSec, AppWindSummarySeconds);
+    dirBufSeconds_     = windPrefs_.getInt(kKeyDirBufSec, WindBufferLengthSeconds);
     windPrefs_.end();
     // Clamp to valid range in case NVS holds a stale/out-of-range value.
-    dirAvgSeconds_     = max(1, min(dirAvgSeconds_,     WindBufferLengthSeconds));
+    dirBufSeconds_     = max(1, min(dirBufSeconds_,     kDirBufMaxSeconds));
+    dirAvgSeconds_     = max(1, min(dirAvgSeconds_,     dirBufSeconds_));
     appSummarySeconds_ = max(1, min(appSummarySeconds_, WindBufferLengthSeconds));
-    Serial.printf("Wind config: dir_avg=%ds app_window=%ds\n",
-                  dirAvgSeconds_, appSummarySeconds_);
+    // Resize the direction buffer if it was persisted larger than the default.
+    if (dirBufSeconds_ != WindBufferLengthSeconds) {
+        dirBuf_.resize(dirBufSeconds_ * WindSamplesPerSecond);
+    }
+    Serial.printf("Wind config: dir_avg=%ds dir_buf=%ds app_window=%ds\n",
+                  dirAvgSeconds_, dirBufSeconds_, appSummarySeconds_);
 }
 
 void Anemometer::saveWindConfig() {
     windPrefs_.begin(kWindCfgNamespace, /*readOnly=*/false);
     windPrefs_.putInt(kKeyDirAvgSec, dirAvgSeconds_);
     windPrefs_.putInt(kKeyAppSumSec, appSummarySeconds_);
+    windPrefs_.putInt(kKeyDirBufSec, dirBufSeconds_);
     windPrefs_.end();
 }
 
 void Anemometer::setDirAvgSeconds(int s) {
-    s = max(1, min(s, WindBufferLengthSeconds));
+    s = max(1, min(s, kDirBufMaxSeconds));
+    // Auto-grow the direction buffer if the requested window exceeds it.
+    if (s > dirBufSeconds_) {
+        if (mutex_ != nullptr) {
+            xSemaphoreTake(mutex_, portMAX_DELAY);
+        }
+        dirBuf_.resize(s * WindSamplesPerSecond);
+        dirBufSeconds_ = s;
+        if (mutex_ != nullptr) {
+            xSemaphoreGive(mutex_);
+        }
+        Serial.printf("Wind dir_buf auto-grown to %ds (%d samples)\n",
+                      s, s * WindSamplesPerSecond);
+    }
     dirAvgSeconds_ = s;
     saveWindConfig();
     Serial.printf("Wind dir_avg set to %ds\n", s);
@@ -70,6 +95,28 @@ void Anemometer::setAppSummarySeconds(int s) {
     appSummarySeconds_ = s;
     saveWindConfig();
     Serial.printf("Wind app_window set to %ds\n", s);
+}
+
+void Anemometer::setDirBufSeconds(int s) {
+    s = max(1, min(s, kDirBufMaxSeconds));
+    // If shrinking below the current averaging window, pull dir-avg down too.
+    if (s < dirAvgSeconds_) {
+        dirAvgSeconds_ = s;
+        Serial.printf("Wind dir_avg reduced to %ds to fit new buffer\n", s);
+    }
+    // Resize while holding the anemometer mutex so sampleSlot() (core 0)
+    // doesn't write into the buffer during the operation.
+    if (mutex_ != nullptr) {
+        xSemaphoreTake(mutex_, portMAX_DELAY);
+    }
+    dirBuf_.resize(s * WindSamplesPerSecond);
+    dirBufSeconds_ = s;
+    if (mutex_ != nullptr) {
+        xSemaphoreGive(mutex_);
+    }
+    saveWindConfig();
+    Serial.printf("Wind dir_buf set to %ds (%d samples, buffer reset)\n",
+                  s, s * WindSamplesPerSecond);
 }
 
 bool Anemometer::begin() {

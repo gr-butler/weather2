@@ -51,6 +51,12 @@ public:
     void setDirAvgSeconds(int s);
     void setAppSummarySeconds(int s);
 
+    // Direction-buffer size (seconds). The buffer is only grown/shrunk on
+    // explicit request or when dir-avg is set beyond the current buffer.
+    // Range: [1, 300]. Persisted to NVS. Resizing clears existing data.
+    int getDirBufSeconds() const { return dirBufSeconds_; }
+    void setDirBufSeconds(int s);
+
     double getSpeed() {
         MutexGuard g(mutex_);
         return windSpeedMph(speedBuf_);
@@ -103,6 +109,7 @@ private:
     // begin(); default to constants.h values if not previously set.
     int dirAvgSeconds_ = WindDirectionAverageSeconds;
     int appSummarySeconds_ = AppWindSummarySeconds;
+    int dirBufSeconds_ = WindBufferLengthSeconds;
     Preferences windPrefs_;
 
     SampleBuffer speedBuf_;

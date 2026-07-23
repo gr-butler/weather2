@@ -196,6 +196,7 @@ void TelnetServer::cmdStatus() {
         "  Recovery    : %s\r\n"
         "  Wind online : %s\r\n"
         "  dir-avg     : %ds (default %ds)\r\n"
+        "  dir-buf     : %ds\r\n"
         "  app-window  : %ds (default %ds)\r\n",
         upHr, upMin, upSec,
         ESP.getFreeHeap(),
@@ -206,6 +207,7 @@ void TelnetServer::cmdStatus() {
         (reporting_ && reporting_->isRecoveryMode()) ? "YES" : "no",
         (wind_ && wind_->isOnline()) ? "yes" : "NO",
         wind_ ? wind_->getDirAvgSeconds()     : -1, WindDirectionAverageSeconds,
+        wind_ ? wind_->getDirBufSeconds()     : -1,
         wind_ ? wind_->getAppSummarySeconds() : -1, AppWindSummarySeconds);
 }
 
@@ -214,9 +216,11 @@ void TelnetServer::cmdSet(const String &args) {
     if (args.length() == 0) {
         client_.printf(
             "  dir-avg    : %ds (default %ds)\r\n"
+            "  dir-buf    : %ds (max 300s)\r\n"
             "  app-window : %ds (default %ds)\r\n",
             wind_ ? wind_->getDirAvgSeconds()     : -1,
             WindDirectionAverageSeconds,
+            wind_ ? wind_->getDirBufSeconds()     : -1,
             wind_ ? wind_->getAppSummarySeconds() : -1,
             AppWindSummarySeconds);
         return;
@@ -226,7 +230,7 @@ void TelnetServer::cmdSet(const String &args) {
     int sp = args.indexOf(' ');
     if (sp < 0) {
         client_.printf("Usage: set <key> <value>\r\n"
-                       "  Keys: dir-avg  app-window\r\n"
+                       "  Keys: dir-avg  dir-buf  app-window\r\n"
                        "  (no args: show current values)\r\n");
         return;
     }
@@ -250,10 +254,40 @@ void TelnetServer::cmdSet(const String &args) {
             client_.print("Wind sensor not available.\r\n");
             return;
         }
-        int prev = wind_->getDirAvgSeconds();
+        int prevAvg = wind_->getDirAvgSeconds();
+        int prevBuf = wind_->getDirBufSeconds();
         wind_->setDirAvgSeconds(n);
-        client_.printf("dir-avg: %ds -> %ds (saved to NVS).\r\n",
-                       prev, wind_->getDirAvgSeconds());
+        int actualAvg = wind_->getDirAvgSeconds();
+        int actualBuf = wind_->getDirBufSeconds();
+        if (actualAvg != n) {
+            client_.printf("dir-avg: %ds -> %ds (requested %ds clamped to max 300s, saved to NVS).\r\n",
+                           prevAvg, actualAvg, n);
+        } else if (actualBuf != prevBuf) {
+            client_.printf("dir-avg: %ds -> %ds; dir-buf grown %ds -> %ds (saved to NVS).\r\n",
+                           prevAvg, actualAvg, prevBuf, actualBuf);
+        } else {
+            client_.printf("dir-avg: %ds -> %ds (saved to NVS).\r\n", prevAvg, actualAvg);
+        }
+    } else if (key == "dir-buf") {
+        if (!wind_) {
+            client_.print("Wind sensor not available.\r\n");
+            return;
+        }
+        int prevBuf = wind_->getDirBufSeconds();
+        int prevAvg = wind_->getDirAvgSeconds();
+        wind_->setDirBufSeconds(n);
+        int actualBuf = wind_->getDirBufSeconds();
+        int actualAvg = wind_->getDirAvgSeconds();
+        if (actualBuf != n) {
+            client_.printf("dir-buf: %ds -> %ds (requested %ds clamped to max 300s; buffer reset, saved to NVS).\r\n",
+                           prevBuf, actualBuf, n);
+        } else if (actualAvg != prevAvg) {
+            client_.printf("dir-buf: %ds -> %ds; dir-avg reduced %ds -> %ds (buffer reset, saved to NVS).\r\n",
+                           prevBuf, actualBuf, prevAvg, actualAvg);
+        } else {
+            client_.printf("dir-buf: %ds -> %ds (buffer reset, saved to NVS).\r\n",
+                           prevBuf, actualBuf);
+        }
     } else if (key == "app-window") {
         if (!wind_) {
             client_.print("Wind sensor not available.\r\n");
@@ -261,23 +295,30 @@ void TelnetServer::cmdSet(const String &args) {
         }
         int prev = wind_->getAppSummarySeconds();
         wind_->setAppSummarySeconds(n);
-        client_.printf("app-window: %ds -> %ds (saved to NVS).\r\n",
-                       prev, wind_->getAppSummarySeconds());
+        int actual = wind_->getAppSummarySeconds();
+        if (actual != n) {
+            client_.printf("app-window: %ds -> %ds (requested %ds clamped; max=%ds, saved to NVS).\r\n",
+                           prev, actual, n, WindBufferLengthSeconds);
+        } else {
+            client_.printf("app-window: %ds -> %ds (saved to NVS).\r\n", prev, actual);
+        }
     } else {
-        client_.printf("Unknown key '%s'. Valid keys: dir-avg, app-window\r\n",
+        client_.printf("Unknown key '%s'. Valid keys: dir-avg, dir-buf, app-window\r\n",
                        key.c_str());
     }
 }
 
 void TelnetServer::cmdHelp() {
-    client_.print(
+    client_.printf(
         "  w                       — current weather readings\r\n"
         "  status                  — system status (uptime, heap, network, MQTT)\r\n"
         "  set                     — show wind window config\r\n"
-        "  set dir-avg <seconds>   — wind direction smoothing window [1-60]\r\n"
-        "  set app-window <seconds>— app MQTT summary window [1-60]\r\n"
+        "  set dir-avg <seconds>   — direction smoothing window (auto-grows buf) [1-300]\r\n"
+        "  set dir-buf <seconds>   — direction buffer size [1-300]; resets data\r\n"
+        "  set app-window <seconds>— app MQTT summary window [1-%d]\r\n"
         "  help/?                  — this message\r\n"
-        "  quit/q                  — disconnect\r\n");
+        "  quit/q                  — disconnect\r\n",
+        WindBufferLengthSeconds);
 }
 
 void TelnetServer::prompt() {
