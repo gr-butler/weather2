@@ -211,7 +211,105 @@ inline double windDirectionRolling(SampleBuffer &dirBuf, int windowSamples) {
     return deg;
 }
 
-// voltToDegrees(): wind-vane voltage -> compass bearing. Thresholds are the
+// Robust wind direction that rejects the spurious scatter produced by a small,
+// buffeted vane that occasionally spins. A plain circular mean is easily
+// dragged off the true bearing by a handful of scattered spin samples; this
+// instead:
+//   1. Builds a 16-point histogram of the discrete vane bearings in the window.
+//   2. Circularly smooths it (adds half of each neighbour) so a wind genuinely
+//      wandering between two adjacent bearings is treated as one peak, then
+//      picks the dominant (modal) bearing.
+//   3. Discards any sample more than WindDirectionOutlierDeg from that modal
+//      bearing as spin scatter.
+//   4. Returns the circular mean of the surviving in-liers.
+// Falls back to the plain circular mean of the whole window only in the
+// degenerate case where nothing survives the filter.
+inline double windDirectionFiltered(SampleBuffer &dirBuf, int windowSamples) {
+    int size = 0;
+    int position = 0;
+    std::vector<double> data = dirBuf.getRawData(size, position);
+    if (size <= 0) {
+        return 0.0;
+    }
+
+    int window = windowSamples;
+    if (window < 1) {
+        window = 1;
+    }
+    if (window > size) {
+        window = size;
+    }
+
+    int index = position - window;
+    if (index < 0) {
+        index += size;
+    }
+
+    // 16-point compass histogram (bins at 0, 22.5, ... 337.5 degrees), matching
+    // the discrete bearings windVoltToDegrees() produces.
+    constexpr int kBins = 16;
+    constexpr double kBinDeg = 360.0 / kBins; // 22.5
+    int hist[kBins] = {0};
+
+    std::vector<double> samples;
+    samples.reserve(window);
+    for (int i = 0; i < window; i++) {
+        double deg = data[index];
+        samples.push_back(deg);
+        int bin = static_cast<int>(std::lround(deg / kBinDeg)) % kBins;
+        if (bin < 0) {
+            bin += kBins;
+        }
+        hist[bin]++;
+
+        index += 1;
+        if (index == size) {
+            index = 0;
+        }
+    }
+
+    // Pick the dominant bin using neighbour-smoothed scores.
+    int bestBin = 0;
+    double bestScore = -1.0;
+    for (int b = 0; b < kBins; b++) {
+        double score = hist[b] + 0.5 * hist[(b + 1) % kBins] +
+                       0.5 * hist[(b + kBins - 1) % kBins];
+        if (score > bestScore) {
+            bestScore = score;
+            bestBin = b;
+        }
+    }
+    double modeDeg = bestBin * kBinDeg;
+
+    // Circular-mean the samples within WindDirectionOutlierDeg of the mode.
+    double sinSum = 0.0;
+    double cosSum = 0.0;
+    int kept = 0;
+    for (double deg : samples) {
+        double diff = std::fabs(deg - modeDeg);
+        if (diff > 180.0) {
+            diff = 360.0 - diff;
+        }
+        if (diff <= WindDirectionOutlierDeg) {
+            double rad = deg * M_PI / 180.0;
+            sinSum += std::sin(rad);
+            cosSum += std::cos(rad);
+            kept++;
+        }
+    }
+
+    // Degenerate fallback: nothing survived, use the plain circular mean.
+    if (kept == 0) {
+        return windDirectionRolling(dirBuf, windowSamples);
+    }
+
+    double deg = std::atan2(sinSum, cosSum) * 180.0 / M_PI;
+    if (deg < 0.0) {
+        deg += 360.0;
+    }
+    return deg;
+}
+
 // exact midpoint values measured in the Go reference. outStr (optional)
 // receives the cardinal-point label.
 inline double windVoltToDegrees(double v, const char **outStr = nullptr) {

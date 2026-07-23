@@ -14,6 +14,7 @@
 #include "reset_reason.h"
 #include "river.h"
 #include "secrets.h"
+#include "telnet.h"
 #include "version.h"
 #include "weblog.h"
 #include "webserver.h"
@@ -51,6 +52,7 @@ RiverMonitor riverMonitor;
 
 Reporting reporting(&atmosphere, &rainmeter, &anemometer, &riverMonitor);
 WeatherWebServer webServer(&atmosphere, &rainmeter, &anemometer, &riverMonitor);
+TelnetServer telnet(&atmosphere, &rainmeter, &anemometer, &riverMonitor, &reporting);
 
 unsigned long lastHeartbeatMs = 0;
 
@@ -157,6 +159,9 @@ void setup() {
     // Web service: live JSON (/) + Prometheus (/metrics), plus OTA at /update.
     webServer.begin();
     ElegantOTA.begin(&webServer.server());
+
+    // Telnet console on port 23.
+    telnet.begin();
     Serial.println("ElegantOTA available at /update");
 
     // Watchdog — reboot if loop() stalls (e.g. a hung network call).
@@ -169,6 +174,7 @@ void setup() {
 
 void loop() {
     ElegantOTA.loop();
+    telnet.service();
 
     // Keep the network up: Ethernet is primary, WiFi is the fallback. Reboots
     // only as a last resort if BOTH links stay down (see src/net.cpp).

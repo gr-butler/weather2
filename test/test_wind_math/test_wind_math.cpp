@@ -84,6 +84,46 @@ void test_direction_rolling_wraparound(void) {
     TEST_ASSERT_TRUE((deg <= 2.0) || (deg >= 358.0));
 }
 
+void test_direction_filtered_rejects_spin_scatter(void) {
+    SampleBuffer dirBuf(WindBufferSamples);
+    dirBuf.addItem(90.0); // prefill: light wind from the east (E)
+
+    // Simulate a buffeted vane: mostly dwelling at E (90) with occasional
+    // spins scattering samples all around the compass. Fill the full averaging
+    // window so the modal filter has plenty to work with.
+    const int window = WindSamplesPerSecond * WindDirectionAverageSeconds; // 120
+    const double spins[] = {0.0, 45.0, 180.0, 225.0, 315.0, 270.0};
+    int spinIdx = 0;
+    for (int i = 0; i < window; i++) {
+        if (i % 5 == 0) { // ~20% spurious scatter
+            dirBuf.addItem(spins[spinIdx % 6]);
+            spinIdx++;
+        } else {
+            dirBuf.addItem(90.0); // true bearing: E
+        }
+    }
+
+    // A plain circular mean is dragged away by the scatter; the filtered
+    // result should stay locked on to E (90 degrees).
+    double filtered = windDirectionFiltered(dirBuf, window);
+    TEST_ASSERT_TRUE((filtered >= 85.0) && (filtered <= 95.0));
+}
+
+void test_direction_filtered_follows_adjacent_wander(void) {
+    SampleBuffer dirBuf(WindBufferSamples);
+    dirBuf.addItem(90.0);
+
+    // Wind genuinely wandering between E (90) and ENE (67.5) should average to
+    // a bearing between them, not be discarded as scatter.
+    const int window = WindSamplesPerSecond * WindDirectionAverageSeconds;
+    for (int i = 0; i < window; i++) {
+        dirBuf.addItem((i % 2 == 0) ? 90.0 : 67.5);
+    }
+
+    double filtered = windDirectionFiltered(dirBuf, window);
+    TEST_ASSERT_TRUE((filtered >= 67.5) && (filtered <= 90.0));
+}
+
 int main(int, char **) {
     UNITY_BEGIN();
     RUN_TEST(test_speed_zero_then_one_pulse);
@@ -93,5 +133,7 @@ int main(int, char **) {
     RUN_TEST(test_volt_to_degrees_cardinals);
     RUN_TEST(test_direction_average);
     RUN_TEST(test_direction_rolling_wraparound);
+    RUN_TEST(test_direction_filtered_rejects_spin_scatter);
+    RUN_TEST(test_direction_filtered_follows_adjacent_wander);
     return UNITY_END();
 }

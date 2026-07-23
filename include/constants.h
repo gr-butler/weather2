@@ -11,8 +11,15 @@ constexpr float MphPerTick = 1.429f;
 // https://www.metoffice.gov.uk/weather/guides/observations/how-we-measure-wind
 constexpr int WindSamplesPerSecond = 4;     // one sample every 250 ms
 constexpr int WindBufferLengthSeconds = 60; // 1-minute rolling window
-constexpr int WindDirectionAverageSeconds = 5; // rolling direction smoothing window
+// Rolling direction smoothing window. Kept long because the (physically small)
+// vane is buffeted and occasionally spins; a longer window lets the dwelling
+// bearing dominate the spurious spin scatter. See windDirectionFiltered().
+constexpr int WindDirectionAverageSeconds = 60; // rolling direction smoothing window
 constexpr int AppWindSummarySeconds = 30; // app-facing MQTT wind summary window
+// Wind-direction scatter rejection: a sample whose bearing is more than this
+// many degrees from the modal (most-frequent) bearing in the window is treated
+// as spin scatter from the buffeted vane and discarded before averaging.
+constexpr float WindDirectionOutlierDeg = 45.0f;
 
 // Number of slots in the wind circular buffers: 4 * 60 = 240
 constexpr int WindBufferSamples = WindSamplesPerSecond * WindBufferLengthSeconds;
@@ -92,3 +99,6 @@ constexpr unsigned long RiverPollIntervalMs = 7UL * 60UL * 1000UL;
 // hardware watchdog so a stalled request cannot panic-reboot the device.
 constexpr unsigned long RiverHttpConnectTimeoutMs = 10000;
 constexpr unsigned long RiverHttpTimeoutMs = 15000;
+
+// --- Telnet console -----------------------------------------------------
+constexpr uint16_t TelnetPort = 23;
