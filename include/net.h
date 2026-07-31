@@ -15,13 +15,15 @@ namespace net {
 void begin();
 
 // Call frequently from loop(): nudges WiFi reconnection and, as a last resort,
-// reboots the device only if BOTH links stay down for too long.
+// reboots the device if BOTH links stay down too long OR the default gateway
+// becomes unreachable (a wedged stack that still holds an IP).
 void service();
 
 bool isUp();         // true if either Ethernet or WiFi has an IP
 bool ethUp();        // true if Ethernet has an IP
 bool wifiUp();       // true if WiFi STA is connected
 IPAddress ip();      // active IP — Ethernet preferred, then WiFi, else 0.0.0.0
+IPAddress gatewayIP(); // active default gateway — Ethernet preferred, then WiFi
 int rssi();          // WiFi signal strength (dBm); 0 when WiFi is not connected
 const char *iface(); // "eth", "wifi" or "none"
 

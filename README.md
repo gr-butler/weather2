@@ -120,7 +120,7 @@ reporting logic.
 | Topic                       | Direction | Cadence    | Purpose |
 |-----------------------------|-----------|------------|---------|
 | `culverhay/weather/command` | subscribe | on demand  | Inbound commands (see below) |
-| `culverhay/weather/status`  | publish   | on demand  | Replies to commands (`status`, acks) |
+| `culverhay/weather/status`  | publish   | on (re)connect + on demand | **Retained** health snapshot: seeded on every MQTT (re)connect (incl. startup) and refreshed by the `status` command |
 | `beacon/weatherstation`     | publish   | every 30 s | Presence broadcast `{id, ip_address, command_topic}` |
 
 ### Commands
@@ -129,7 +129,7 @@ Publish one of these strings to `culverhay/weather/command` (case-insensitive):
 
 | Command                         | Action |
 |---------------------------------|--------|
-| `status`                        | Publish a health + readings snapshot to the status topic |
+| `status`                        | Publish the device status snapshot to the status topic |
 | `report` / `report-now`         | Force an immediate sensor refresh, MQTT publish and WOW upload |
 | `ip` / `address`                | Publish the current IP address |
 | `version`                       | Publish the firmware version |
@@ -142,33 +142,46 @@ Publish one of these strings to `culverhay/weather/command` (case-insensitive):
 suspending all sensor processing and reporting — use it to recover a misbehaving
 unit without a physical visit, then `resume` or `reset`.
 
+The `status` topic carries device **state only** (identity, firmware, boot
+reason, reboot history, recovery flag, per-sensor health) — never live weather
+readings, which stay on `culverhay/weather`. It is **retained** and republished
+**only when the state changes** (a reboot, a recovery toggle, or a sensor going
+online/offline); the `status` command re-emits it on demand.
+
 `status` payload:
 
 ```json
 {
   "id": "weatherstation",
   "ip": "0.0.0.0",
-  "rssi": -60,
-  "uptime_s": 1234,
-  "heap": 123456,
   "version": "1.2.3",
   "boot_reason": "power-on",
+  "reboots": "01,04,02,01,03",
   "recovery": false,
   "atmosphere": true,
   "rain": true,
   "wind": true,
-  "river": true,
-  "temp": 0.00,
-  "humidity": 0.00,
-  "pressure": 0.00,
-  "windspeed": 0.00,
-  "windgust": 0.00,
-  "winddir": 0.00,
-  "rain_mm_hr": 0.00,
-  "river_level": 0.000,
-  "rain_day": 0.000
+  "river": true
 }
 ```
+
+`reboots` is the last five restarts, most-recent first, as 2-digit reason codes:
+
+| Code | Reason |
+|------|--------|
+| `01` | Power cycle (power applied) |
+| `02` | Firmware upgrade (OTA) |
+| `03` | Crash / exception (panic) |
+| `04` | Self-heal (network watchdog reboot) |
+| `05` | User command (MQTT `reset`/`reboot`) |
+| `06` | Watchdog hang (task / interrupt watchdog) |
+| `07` | Brownout |
+| `08` | External reset / other |
+| `09` | Software reboot (no recorded cause) |
+| `00` | Unknown |
+
+`boot_reason` remains the human-readable cause of the **current** boot; `reboots`
+adds the persisted short-code history across power cycles.
 
 ## HTTP endpoints (port 80)
 

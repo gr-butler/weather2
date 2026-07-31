@@ -5,6 +5,12 @@
 #include <ETH.h>
 #endif
 
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#include <lwip/ip_addr.h>
+#include <ping/ping_sock.h>
+
+#include "reboot_log.h"
 #include "secrets.h"
 #include "weblog.h"
 #define Serial Log // capture Serial output for the /logs web view
@@ -38,7 +44,86 @@ constexpr unsigned long kWifiRetryIntervalMs = 10000; // nudge WiFi every 10 s
 constexpr unsigned long kNetCheckIntervalMs = 10000;  // re-check "all down" 10 s
 constexpr int kNetMaxDownReboots = 12;                // ~2 min down -> reboot
 
+// Active reachability watchdog. isUp() only proves the interface still HOLDS an
+// IP; the lwIP stack / PHY path can wedge so the device is unreachable while
+// loop() keeps running and neither the task watchdog nor the both-links-down
+// check above ever fires. We ICMP-ping the default gateway and reboot if it
+// stays unreachable for kReachMaxFailReboots consecutive checks.
+constexpr unsigned long kReachCheckIntervalMs = 30000; // ping gateway every 30 s
+constexpr uint8_t kReachPingCount = 2;                 // echo requests per check
+constexpr uint32_t kReachPingTimeoutMs = 1000;         // per-request timeout
+constexpr int kReachMaxFailReboots = 10;               // ~5 min unreachable -> reboot
+
 constexpr const char *kHostname = "weather-station";
+
+// Record the reason (surfaced in the reboot history), then restart. Used by both
+// the both-links-down watchdog and the gateway-reachability watchdog.
+void triggerSelfHealReboot(const char *reason) {
+    rebootlog::setPending(rebootlog::Reason::SelfHeal, reason);
+    Serial.printf("SELF-HEAL: %s -- rebooting\n", reason);
+    delay(100);
+    ESP.restart();
+}
+
+// Blocking ICMP echo (ping) of `target`. Returns true if at least one reply
+// arrives within the per-request timeout. With the defaults used here it runs in
+// well under 3 s, so it stays comfortably inside the 30 s task watchdog window.
+bool pingHost(const IPAddress &target, uint8_t count, uint32_t timeoutMs) {
+    if (static_cast<uint32_t>(target) == 0) {
+        return false;
+    }
+
+    ip_addr_t addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.type = IPADDR_TYPE_V4;
+    addr.u_addr.ip4.addr = static_cast<uint32_t>(target);
+
+    SemaphoreHandle_t done = xSemaphoreCreateBinary();
+    if (done == nullptr) {
+        return false;
+    }
+    volatile uint32_t received = 0;
+
+    struct Ctx {
+        SemaphoreHandle_t done;
+        volatile uint32_t *received;
+    } ctx{done, &received};
+
+    esp_ping_config_t cfg = ESP_PING_DEFAULT_CONFIG();
+    cfg.target_addr = addr;
+    cfg.count = count;
+    cfg.timeout_ms = timeoutMs;
+    cfg.interval_ms = 100;
+
+    esp_ping_callbacks_t cbs = {};
+    cbs.cb_args = &ctx;
+    cbs.on_ping_success = [](esp_ping_handle_t, void *args) {
+        auto *c = static_cast<Ctx *>(args);
+        (*c->received)++;
+    };
+    cbs.on_ping_timeout = nullptr;
+    cbs.on_ping_end = [](esp_ping_handle_t, void *args) {
+        auto *c = static_cast<Ctx *>(args);
+        xSemaphoreGive(c->done);
+    };
+
+    esp_ping_handle_t hdl = nullptr;
+    if (esp_ping_new_session(&cfg, &cbs, &hdl) != ESP_OK) {
+        vSemaphoreDelete(done);
+        return false;
+    }
+    esp_ping_start(hdl);
+
+    const uint32_t waitMs =
+        static_cast<uint32_t>(count) * (timeoutMs + cfg.interval_ms) + 500;
+    const bool finished = xSemaphoreTake(done, pdMS_TO_TICKS(waitMs)) == pdTRUE;
+
+    esp_ping_stop(hdl);
+    esp_ping_delete_session(hdl);
+    vSemaphoreDelete(done);
+
+    return finished && received > 0;
+}
 
 // Unified handler for both ETH and WiFi events (the Arduino core funnels both
 // through WiFi.onEvent). Registered before either interface is started so we
@@ -141,7 +226,9 @@ void begin() {
 void service() {
     static unsigned long lastWifiRetry = 0;
     static unsigned long lastDownCheck = 0;
+    static unsigned long lastReachCheck = 0;
     static int downCount = 0;
+    static int reachFailCount = 0;
     unsigned long now = millis();
 
     // Nudge WiFi back up if it has dropped. setAutoReconnect(true) handles
@@ -168,12 +255,34 @@ void service() {
         if (isUp()) {
             downCount = 0;
         } else if (++downCount >= kNetMaxDownReboots) {
-            Serial.println("Network down too long (no ETH or WiFi) — rebooting");
-            delay(100);
-            ESP.restart();
+            triggerSelfHealReboot("no ETH or WiFi link");
         } else {
             Serial.printf("Network fully down (%d/%d)\n", downCount,
                           kNetMaxDownReboots);
+        }
+    }
+
+    // Reachability watchdog: even with an IP, ping the gateway to prove the
+    // stack can actually pass traffic. Pinging the GATEWAY (local, always-on)
+    // means an internet/ISP outage — which a reboot cannot fix — never triggers
+    // a needless restart; only a genuinely wedged local stack does.
+    if (now - lastReachCheck >= kReachCheckIntervalMs) {
+        lastReachCheck = now;
+        if (!isUp()) {
+            reachFailCount = 0; // the both-links-down watchdog owns this case
+        } else {
+            IPAddress gw = gatewayIP();
+            if (static_cast<uint32_t>(gw) == 0) {
+                reachFailCount = 0; // no gateway learned yet — nothing to test
+            } else if (pingHost(gw, kReachPingCount, kReachPingTimeoutMs)) {
+                reachFailCount = 0;
+            } else if (++reachFailCount >= kReachMaxFailReboots) {
+                triggerSelfHealReboot("gateway unreachable (network stack wedged)");
+            } else {
+                Serial.printf("Gateway %s unreachable (%d/%d)\n",
+                              gw.toString().c_str(), reachFailCount,
+                              kReachMaxFailReboots);
+            }
         }
     }
 }
@@ -196,6 +305,18 @@ IPAddress ip() {
 #endif
     if (wifiUp()) {
         return WiFi.localIP();
+    }
+    return IPAddress((uint32_t)0);
+}
+
+IPAddress gatewayIP() {
+#ifdef USE_ETHERNET
+    if (ethUp()) {
+        return ETH.gatewayIP();
+    }
+#endif
+    if (wifiUp()) {
+        return WiFi.gatewayIP();
     }
     return IPAddress((uint32_t)0);
 }

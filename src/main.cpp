@@ -10,6 +10,7 @@
 #include "led.h"
 #include "net.h"
 #include "rainmeter.h"
+#include "reboot_log.h"
 #include "reporting.h"
 #include "reset_reason.h"
 #include "river.h"
@@ -117,6 +118,8 @@ void setup() {
     Serial.flush();
     Serial.printf("\n\nStarting weather station [%s]\n", _VERSION);
     logResetReason();
+    // Classify this boot and append it to the persisted last-5 reboot history.
+    rebootlog::begin();
     logStartupConfig();
 
     // LEDs first so we get visible startup feedback.
@@ -159,6 +162,12 @@ void setup() {
     // Web service: live JSON (/) + Prometheus (/metrics), plus OTA at /update.
     webServer.begin();
     ElegantOTA.begin(&webServer.server());
+    // Tag the imminent post-OTA auto-reboot so it shows as "firmware upgrade".
+    ElegantOTA.onEnd([](bool success) {
+        if (success) {
+            rebootlog::setPending(rebootlog::Reason::FirmwareUpgrade, "OTA update");
+        }
+    });
 
     // Telnet console on port 23.
     telnet.begin();

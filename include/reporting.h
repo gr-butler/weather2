@@ -73,7 +73,10 @@ private:
     // --- MQTT control plane (command / status / beacon) ---
     void onMqttMessage(char *topic, uint8_t *payload, unsigned int length);
     void handleCommand(String cmd);
-    void publishStatus();
+    // Publish the retained device-status snapshot. Only publishes when the
+    // payload actually changes (reboot, recovery toggle, sensor health) unless
+    // `force` is set (the on-demand `status` command).
+    void publishStatus(bool force = false);
     void publishBeacon();
 
     Atmosphere *atm_;
@@ -92,6 +95,8 @@ private:
     unsigned long lastPublishMs_ = 0;
     unsigned long lastBeaconMs_ = 0;
     unsigned long lastReconnectMs_ = 0;
+    unsigned long lastStatusCheckMs_ = 0;
+    String lastStatusPayload_; // last published status JSON (publish-on-change)
 
     // Daily rain reset bookkeeping. lastRainResetYday_ is the tm_yday on which
     // the 09:00 reset last fired. It is PERSISTED to NVS so a reboot near/after

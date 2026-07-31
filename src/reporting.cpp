@@ -8,6 +8,7 @@
 #include "conversions.h"
 #include "mqtt_ca_cert.h"
 #include "net.h"
+#include "reboot_log.h"
 #include "reset_reason.h"
 #include "secrets.h"
 #include "version.h"
@@ -24,6 +25,10 @@ constexpr const char *kKeyRainMM = "rainMM";
 constexpr const char *kKeyRainIn = "rainIn";
 constexpr const char *kKeyRainDayIn = "rainDayIn";
 constexpr const char *kKeyRainResetYday = "rainRstYd"; // tm_yday of the last 09:00 reset
+
+// How often to re-evaluate the retained status for changes (reboot, recovery
+// toggle, sensor online/offline). It only publishes when the payload differs.
+constexpr unsigned long kStatusCheckIntervalMs = 15000;
 
 // Only trust wall-clock decisions (09:00 reset, ReportFreqMin gating) once NTP
 // has set the clock — before then time() returns a 1970 epoch.
@@ -177,6 +182,10 @@ bool Reporting::mqttReconnect() {
         } else {
             Serial.printf("Failed to subscribe to %s\n", MqttCommandTopic);
         }
+        // Seed the retained status topic on (re)connect. publish-on-change means
+        // this only actually sends when the status differs from what the broker
+        // already holds (e.g. the first connect after a reboot).
+        publishStatus();
         return true;
     }
     Serial.printf("failed, rc=%d\n", mqtt_.state());
@@ -348,6 +357,14 @@ void Reporting::service() {
         publishBeacon();
     }
 
+    // Republish the retained status only when it actually changes (reboot,
+    // recovery toggle, sensor online/offline) — never on live-reading churn.
+    if (mqtt_.connected() &&
+        now - lastStatusCheckMs_ >= kStatusCheckIntervalMs) {
+        lastStatusCheckMs_ = now;
+        publishStatus(/*force=*/false);
+    }
+
     // Recovery mode: MQTT + OTA only — suspend all sensor/reporting work.
     if (recoveryMode_) {
         return;
@@ -448,9 +465,8 @@ void Reporting::handleCommand(String cmd) {
     cmd.toLowerCase();
 
     if (cmd == "status") {
-        prepData();
         if (mqtt_.connected()) {
-            publishMqtt();
+            publishStatus(/*force=*/true);
         }
     } else if (cmd == "report" || cmd == "report-now") {
         mqtt_.publish(MqttStatusTopic, "reporting now");
@@ -471,14 +487,17 @@ void Reporting::handleCommand(String cmd) {
         recoveryMode_ = true;
         mqtt_.publish(MqttStatusTopic,
                       "recovery mode: MQTT+OTA only, send 'resume' or 'reset'");
+        publishStatus();
         Serial.println("Command: recovery mode activated");
     } else if (cmd == "resume" || cmd == "normal") {
         recoveryMode_ = false;
         mqtt_.publish(MqttStatusTopic, "resumed normal operation");
+        publishStatus();
         Serial.println("Command: resumed normal operation");
     } else if (cmd == "reset" || cmd == "reboot" || cmd == "restart") {
         mqtt_.publish(MqttStatusTopic, "rebooting");
         Serial.println("Command: rebooting");
+        rebootlog::setPending(rebootlog::Reason::UserCommand, "mqtt reset command");
         delay(200); // let the publish flush
         ESP.restart();
     } else {
@@ -488,32 +507,31 @@ void Reporting::handleCommand(String cmd) {
     }
 }
 
-// Publish a health + readings snapshot to the status topic.
-void Reporting::publishStatus() {
-    String ip = net::ip().toString();
-
-    char payload[640];
+// Publish the retained device-status snapshot. Status = device STATE (identity,
+// firmware, boot reason, reboot history, recovery, sensor health) — deliberately
+// NOT live telemetry — so it only changes on meaningful events. Live weather
+// readings live on the data topic (culverhay/weather). Publishes only when the
+// payload differs from the last one, unless `force` is set (the `status` command).
+void Reporting::publishStatus(bool force) {
+    char payload[384];
     snprintf(
         payload, sizeof(payload),
-        "{\"id\":\"%s\",\"ip\":\"%s\",\"rssi\":%d,\"uptime_s\":%lu,"
-        "\"heap\":%u,\"version\":\"%s\",\"boot_reason\":\"%s\",\"recovery\":%s,"
-        "\"atmosphere\":%s,\"rain\":%s,\"wind\":%s,\"river\":%s,"
-        "\"temp\":%.2f,\"humidity\":%.2f,\"pressure\":%.2f,"
-        "\"windspeed\":%.2f,\"windgust\":%.2f,\"winddir\":%.2f,"
-        "\"rain_mm_hr\":%.2f,\"river_level\":%.3f,\"rain_day\":%.3f}",
-        MqttStationId, ip.c_str(), net::rssi(), millis() / 1000UL,
-        (unsigned)ESP.getFreeHeap(), _SEMVER_CORE, bootReasonString(),
+        "{\"id\":\"%s\",\"ip\":\"%s\",\"version\":\"%s\",\"boot_reason\":\"%s\","
+        "\"reboots\":\"%s\",\"recovery\":%s,"
+        "\"atmosphere\":%s,\"rain\":%s,\"wind\":%s,\"river\":%s}",
+        MqttStationId, net::ip().toString().c_str(), _SEMVER_CORE,
+        bootReasonString(), rebootlog::historyCodes().c_str(),
         recoveryMode_ ? "true" : "false",
         (atm_ && atm_->isOnline()) ? "true" : "false",
         (rain_ && rain_->isOnline()) ? "true" : "false",
         (wind_ && wind_->isOnline()) ? "true" : "false",
-        (river_ && river_->lastScrapeSuccess()) ? "true" : "false", v_.tempC,
-        v_.humidity, v_.pressureHpa, v_.windSpeedMph, v_.windGustMph, v_.windDir,
-        rain_ ? rain_->getRate() : 0.0f,
-        river_ ? river_->level() : 0.0f,
-        rain_ ? rain_->getDayAccumulation() : 0.0f);
+        (river_ && river_->lastScrapeSuccess()) ? "true" : "false");
 
-    if (mqtt_.publish(MqttStatusTopic, payload)) {
+    if (!force && lastStatusPayload_ == payload) {
+        return; // unchanged — leave the broker's retained copy as-is
+    }
+    if (mqtt_.publish(MqttStatusTopic, payload, /*retained=*/true)) {
+        lastStatusPayload_ = payload;
         Serial.printf("MQTT status published to %s\n", MqttStatusTopic);
     } else {
         Serial.println("MQTT status publish failed");
