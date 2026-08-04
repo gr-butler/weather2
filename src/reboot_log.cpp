@@ -1,6 +1,7 @@
 #include "reboot_log.h"
 
 #include <Preferences.h>
+#include <esp_core_dump.h>
 #include <esp_system.h>
 
 #include "weblog.h"
@@ -23,6 +24,8 @@ constexpr uint32_t kPendingMagic = 0x52424C31; // 'RBL1'
 constexpr const char *kNs = "rebootlog";
 constexpr const char *kKeyHist = "hist";
 constexpr size_t kMaxHistory = 5;
+// Decoded summary of the most recent crash (task/PC/cause/backtrace).
+constexpr const char *kKeyCrash = "crash";
 
 const char *reasonName(uint8_t code) {
     switch (code) {
@@ -66,6 +69,48 @@ uint8_t classifyBoot() {
         return 0;
     }
 }
+
+// Decode the core dump that the ESP-IDF panic handler wrote to the `coredump`
+// flash partition (enabled by default in arduino-esp32, ELF format), persist a
+// compact one-line summary to NVS, then erase the image so the next boot starts
+// clean. Runs on every boot: a stored dump is only present after a panic. The
+// PCs correspond to the firmware that crashed — decode them against that build's
+// firmware.elf. (The first dump seen right after an OTA may belong to the old
+// build; subsequent crashes on the running build decode exactly.)
+void captureCrashSummary() {
+#if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH && CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF
+    if (esp_core_dump_image_check() != ESP_OK) {
+        return; // no valid core dump stored
+    }
+    auto *sum = static_cast<esp_core_dump_summary_t *>(
+        malloc(sizeof(esp_core_dump_summary_t)));
+    if (sum != nullptr && esp_core_dump_get_summary(sum) == ESP_OK) {
+        char bt[160];
+        size_t off = 0;
+        uint32_t depth = sum->exc_bt_info.depth;
+        if (depth > 8) {
+            depth = 8; // keep the summary compact enough for the status payload
+        }
+        for (uint32_t i = 0; i < depth && off < sizeof(bt) - 12; i++) {
+            off += snprintf(bt + off, sizeof(bt) - off, "%s0x%08x",
+                            i ? " " : "", (unsigned)sum->exc_bt_info.bt[i]);
+        }
+        char detail[256];
+        snprintf(detail, sizeof(detail),
+                 "task=%.15s pc=0x%08x cause=%u vaddr=0x%08x bt=%s",
+                 sum->exc_task, (unsigned)sum->exc_pc,
+                 (unsigned)sum->ex_info.exc_cause,
+                 (unsigned)sum->ex_info.exc_vaddr, bt);
+        Preferences prefs;
+        prefs.begin(kNs, /*readOnly=*/false);
+        prefs.putString(kKeyCrash, detail);
+        prefs.end();
+        Serial.printf("Crash core-dump: %s\n", detail);
+    }
+    free(sum);
+    esp_core_dump_image_erase();
+#endif
+}
 } // namespace
 
 namespace rebootlog {
@@ -104,6 +149,9 @@ void begin() {
     g_pendingMagic = 0;
     g_pendingReason = 0;
     g_pendingDetail[0] = '\0';
+
+    // Decode + persist any core dump a panic left behind, then clear it.
+    captureCrashSummary();
 }
 
 void setPending(Reason reason, const char *detail) {
@@ -133,6 +181,14 @@ String historyCodes() {
         out += buf;
     }
     return out;
+}
+
+String crashDetail() {
+    Preferences prefs;
+    prefs.begin(kNs, /*readOnly=*/true);
+    String detail = prefs.getString(kKeyCrash, "");
+    prefs.end();
+    return detail;
 }
 
 } // namespace rebootlog

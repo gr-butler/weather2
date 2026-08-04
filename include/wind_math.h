@@ -39,45 +39,44 @@ inline double windSpeedMph(SampleBuffer &speedBuf) {
 // Speed over the most recent window: mean pulses/sample in that window,
 // converted to mph using the same constants/clamps as GetSpeed().
 inline double windSpeedMphLastWindow(SampleBuffer &speedBuf, int windowSamples) {
-    int size = 0;
-    int position = 0;
-    std::vector<double> data = speedBuf.getRawData(size, position);
-    if (size <= 0) {
-        return 0.0;
-    }
-
-    int window = windowSamples;
-    if (window < 1) {
-        window = 1;
-    }
-    if (window > size) {
-        window = size;
-    }
-
-    int index = position - window;
-    if (index < 0) {
-        index += size;
-    }
-
-    double sum = 0.0;
-    for (int i = 0; i < window; i++) {
-        sum += data[index];
-        index += 1;
-        if (index == size) {
-            index = 0;
+    return speedBuf.withData([&](const double *data, int size, int position) {
+        if (size <= 0) {
+            return 0.0;
         }
-    }
 
-    double avg = sum / static_cast<double>(window);
-    double ticksPerSec = avg * WindSamplesPerSecond;
-    if (ticksPerSec < 0) {
-        ticksPerSec = 0;
-    }
-    double speed = MphPerTick * ticksPerSec;
-    if (speed > WindSpeedMaxMph) {
-        speed = 0;
-    }
-    return speed;
+        int window = windowSamples;
+        if (window < 1) {
+            window = 1;
+        }
+        if (window > size) {
+            window = size;
+        }
+
+        int index = position - window;
+        if (index < 0) {
+            index += size;
+        }
+
+        double sum = 0.0;
+        for (int i = 0; i < window; i++) {
+            sum += data[index];
+            index += 1;
+            if (index == size) {
+                index = 0;
+            }
+        }
+
+        double avg = sum / static_cast<double>(window);
+        double ticksPerSec = avg * WindSamplesPerSecond;
+        if (ticksPerSec < 0) {
+            ticksPerSec = 0;
+        }
+        double speed = MphPerTick * ticksPerSec;
+        if (speed > WindSpeedMaxMph) {
+            speed = 0;
+        }
+        return speed;
+    });
 }
 
 // GetGust(): "the maximum three second average wind speed occurring in any
@@ -87,21 +86,20 @@ inline double windSpeedMphLastWindow(SampleBuffer &speedBuf, int windowSamples) 
 // Values > WindGustMaxMph are rejected and the previous valid gust is reused.
 inline double windGustMph(SampleBuffer &gustBuf, double &lastGust) {
     constexpr int threeSecond = 3;
-    int size = 0;
-    int position = 0;
-    std::vector<double> data = gustBuf.getRawData(size, position);
-
-    double threeSecMax = 0.0;
-    const int window = WindSamplesPerSecond * threeSecond;
-    for (int i = 0; i < size; i++) {
-        double x = 0;
-        for (int j = 0; j < window; j++) {
-            x += data[windWrappedIndex(i + j, size)];
+    double threeSecMax = gustBuf.withData([](const double *data, int size, int) {
+        double mx = 0.0;
+        const int window = WindSamplesPerSecond * threeSecond;
+        for (int i = 0; i < size; i++) {
+            double x = 0;
+            for (int j = 0; j < window; j++) {
+                x += data[windWrappedIndex(i + j, size)];
+            }
+            if (x > mx) {
+                mx = x;
+            }
         }
-        if (x > threeSecMax) {
-            threeSecMax = x;
-        }
-    }
+        return mx;
+    });
     double val = (threeSecMax / threeSecond) * MphPerTick;
     if (val > WindGustMaxMph) {
         val = lastGust;
@@ -114,36 +112,42 @@ inline double windGustMph(SampleBuffer &gustBuf, double &lastGust) {
 inline double windGustMphLastWindow(SampleBuffer &gustBuf, int windowSamples,
                                     double &lastGust) {
     constexpr int threeSecond = 3;
-    int size = 0;
-    int position = 0;
-    std::vector<double> data = gustBuf.getRawData(size, position);
-    if (size <= 0) {
+    bool empty = false;
+    double threeSecMax = gustBuf.withData([&](const double *data, int size,
+                                              int position) {
+        if (size <= 0) {
+            empty = true;
+            return 0.0;
+        }
+
+        int window = windowSamples;
+        if (window < 1) {
+            window = 1;
+        }
+        if (window > size) {
+            window = size;
+        }
+
+        const int gustWindow = WindSamplesPerSecond * threeSecond;
+        int start = position - window;
+        if (start < 0) {
+            start += size;
+        }
+
+        double mx = 0.0;
+        for (int i = 0; i < window; i++) {
+            double x = 0.0;
+            for (int j = 0; j < gustWindow; j++) {
+                x += data[windWrappedIndex(start + i + j, size)];
+            }
+            if (x > mx) {
+                mx = x;
+            }
+        }
+        return mx;
+    });
+    if (empty) {
         return lastGust;
-    }
-
-    int window = windowSamples;
-    if (window < 1) {
-        window = 1;
-    }
-    if (window > size) {
-        window = size;
-    }
-
-    const int gustWindow = WindSamplesPerSecond * threeSecond;
-    int start = position - window;
-    if (start < 0) {
-        start += size;
-    }
-
-    double threeSecMax = 0.0;
-    for (int i = 0; i < window; i++) {
-        double x = 0.0;
-        for (int j = 0; j < gustWindow; j++) {
-            x += data[windWrappedIndex(start + i + j, size)];
-        }
-        if (x > threeSecMax) {
-            threeSecMax = x;
-        }
     }
 
     double val = (threeSecMax / threeSecond) * MphPerTick;
@@ -163,52 +167,51 @@ inline double windDirection(SampleBuffer &dirBuf) {
 // Rolling direction average over the most recent window using circular mean.
 // This avoids wrap-around errors at north (e.g. 359° + 1° should average to 0°).
 inline double windDirectionRolling(SampleBuffer &dirBuf, int windowSamples) {
-    int size = 0;
-    int position = 0;
-    std::vector<double> data = dirBuf.getRawData(size, position);
-    if (size <= 0) {
-        return 0.0;
-    }
-
-    int window = windowSamples;
-    if (window < 1) {
-        window = 1;
-    }
-    if (window > size) {
-        window = size;
-    }
-
-    int index = position - window;
-    if (index < 0) {
-        index += size;
-    }
-
-    double sinSum = 0.0;
-    double cosSum = 0.0;
-    double lastDeg = 0.0;
-    for (int i = 0; i < window; i++) {
-        double deg = data[index];
-        lastDeg = deg;
-        double rad = deg * M_PI / 180.0;
-        sinSum += std::sin(rad);
-        cosSum += std::cos(rad);
-
-        index += 1;
-        if (index == size) {
-            index = 0;
+    return dirBuf.withData([&](const double *data, int size, int position) {
+        if (size <= 0) {
+            return 0.0;
         }
-    }
 
-    // Opposing vectors can cancel to ~0. In that ambiguous case keep last.
-    if (std::fabs(sinSum) < 1e-9 && std::fabs(cosSum) < 1e-9) {
-        return lastDeg;
-    }
+        int window = windowSamples;
+        if (window < 1) {
+            window = 1;
+        }
+        if (window > size) {
+            window = size;
+        }
 
-    double deg = std::atan2(sinSum, cosSum) * 180.0 / M_PI;
-    if (deg < 0.0) {
-        deg += 360.0;
-    }
-    return deg;
+        int index = position - window;
+        if (index < 0) {
+            index += size;
+        }
+
+        double sinSum = 0.0;
+        double cosSum = 0.0;
+        double lastDeg = 0.0;
+        for (int i = 0; i < window; i++) {
+            double deg = data[index];
+            lastDeg = deg;
+            double rad = deg * M_PI / 180.0;
+            sinSum += std::sin(rad);
+            cosSum += std::cos(rad);
+
+            index += 1;
+            if (index == size) {
+                index = 0;
+            }
+        }
+
+        // Opposing vectors can cancel to ~0. In that ambiguous case keep last.
+        if (std::fabs(sinSum) < 1e-9 && std::fabs(cosSum) < 1e-9) {
+            return lastDeg;
+        }
+
+        double deg = std::atan2(sinSum, cosSum) * 180.0 / M_PI;
+        if (deg < 0.0) {
+            deg += 360.0;
+        }
+        return deg;
+    });
 }
 
 // Robust wind direction that rejects the spurious scatter produced by a small,
@@ -225,89 +228,114 @@ inline double windDirectionRolling(SampleBuffer &dirBuf, int windowSamples) {
 // Falls back to the plain circular mean of the whole window only in the
 // degenerate case where nothing survives the filter.
 inline double windDirectionFiltered(SampleBuffer &dirBuf, int windowSamples) {
-    int size = 0;
-    int position = 0;
-    std::vector<double> data = dirBuf.getRawData(size, position);
-    if (size <= 0) {
-        return 0.0;
-    }
-
-    int window = windowSamples;
-    if (window < 1) {
-        window = 1;
-    }
-    if (window > size) {
-        window = size;
-    }
-
-    int index = position - window;
-    if (index < 0) {
-        index += size;
-    }
-
-    // 16-point compass histogram (bins at 0, 22.5, ... 337.5 degrees), matching
-    // the discrete bearings windVoltToDegrees() produces.
-    constexpr int kBins = 16;
-    constexpr double kBinDeg = 360.0 / kBins; // 22.5
-    int hist[kBins] = {0};
-
-    std::vector<double> samples;
-    samples.reserve(window);
-    for (int i = 0; i < window; i++) {
-        double deg = data[index];
-        samples.push_back(deg);
-        int bin = static_cast<int>(std::lround(deg / kBinDeg)) % kBins;
-        if (bin < 0) {
-            bin += kBins;
+    return dirBuf.withData([&](const double *data, int size, int position) {
+        if (size <= 0) {
+            return 0.0;
         }
-        hist[bin]++;
 
-        index += 1;
-        if (index == size) {
-            index = 0;
+        int window = windowSamples;
+        if (window < 1) {
+            window = 1;
         }
-    }
+        if (window > size) {
+            window = size;
+        }
 
-    // Pick the dominant bin using neighbour-smoothed scores.
-    int bestBin = 0;
-    double bestScore = -1.0;
-    for (int b = 0; b < kBins; b++) {
-        double score = hist[b] + 0.5 * hist[(b + 1) % kBins] +
-                       0.5 * hist[(b + kBins - 1) % kBins];
-        if (score > bestScore) {
-            bestScore = score;
-            bestBin = b;
+        int start = position - window;
+        if (start < 0) {
+            start += size;
         }
-    }
-    double modeDeg = bestBin * kBinDeg;
 
-    // Circular-mean the samples within WindDirectionOutlierDeg of the mode.
-    double sinSum = 0.0;
-    double cosSum = 0.0;
-    int kept = 0;
-    for (double deg : samples) {
-        double diff = std::fabs(deg - modeDeg);
-        if (diff > 180.0) {
-            diff = 360.0 - diff;
+        // 16-point compass histogram (bins at 0, 22.5, ... 337.5 degrees),
+        // matching the discrete bearings windVoltToDegrees() produces.
+        constexpr int kBins = 16;
+        constexpr double kBinDeg = 360.0 / kBins; // 22.5
+        int hist[kBins] = {0};
+
+        // Pass 1: build the histogram directly from the ring (no sample copy).
+        int index = start;
+        for (int i = 0; i < window; i++) {
+            double deg = data[index];
+            int bin = static_cast<int>(std::lround(deg / kBinDeg)) % kBins;
+            if (bin < 0) {
+                bin += kBins;
+            }
+            hist[bin]++;
+
+            index += 1;
+            if (index == size) {
+                index = 0;
+            }
         }
-        if (diff <= WindDirectionOutlierDeg) {
+
+        // Pick the dominant bin using neighbour-smoothed scores.
+        int bestBin = 0;
+        double bestScore = -1.0;
+        for (int b = 0; b < kBins; b++) {
+            double score = hist[b] + 0.5 * hist[(b + 1) % kBins] +
+                           0.5 * hist[(b + kBins - 1) % kBins];
+            if (score > bestScore) {
+                bestScore = score;
+                bestBin = b;
+            }
+        }
+        double modeDeg = bestBin * kBinDeg;
+
+        // Pass 2: circular-mean the in-liers (within WindDirectionOutlierDeg of
+        // the mode); accumulate the whole-window mean in parallel so the
+        // degenerate fallback never has to re-take the buffer lock.
+        double sinSum = 0.0;
+        double cosSum = 0.0;
+        double sinAll = 0.0;
+        double cosAll = 0.0;
+        double lastDeg = 0.0;
+        int kept = 0;
+        index = start;
+        for (int i = 0; i < window; i++) {
+            double deg = data[index];
+            lastDeg = deg;
             double rad = deg * M_PI / 180.0;
-            sinSum += std::sin(rad);
-            cosSum += std::cos(rad);
-            kept++;
+            double s = std::sin(rad);
+            double c = std::cos(rad);
+            sinAll += s;
+            cosAll += c;
+
+            double diff = std::fabs(deg - modeDeg);
+            if (diff > 180.0) {
+                diff = 360.0 - diff;
+            }
+            if (diff <= WindDirectionOutlierDeg) {
+                sinSum += s;
+                cosSum += c;
+                kept++;
+            }
+
+            index += 1;
+            if (index == size) {
+                index = 0;
+            }
         }
-    }
 
-    // Degenerate fallback: nothing survived, use the plain circular mean.
-    if (kept == 0) {
-        return windDirectionRolling(dirBuf, windowSamples);
-    }
+        // Degenerate fallback: nothing survived — plain circular mean of the
+        // whole window (identical to windDirectionRolling(), inlined here to
+        // avoid recursively re-taking the buffer lock).
+        if (kept == 0) {
+            if (std::fabs(sinAll) < 1e-9 && std::fabs(cosAll) < 1e-9) {
+                return lastDeg;
+            }
+            double deg = std::atan2(sinAll, cosAll) * 180.0 / M_PI;
+            if (deg < 0.0) {
+                deg += 360.0;
+            }
+            return deg;
+        }
 
-    double deg = std::atan2(sinSum, cosSum) * 180.0 / M_PI;
-    if (deg < 0.0) {
-        deg += 360.0;
-    }
-    return deg;
+        double deg = std::atan2(sinSum, cosSum) * 180.0 / M_PI;
+        if (deg < 0.0) {
+            deg += 360.0;
+        }
+        return deg;
+    });
 }
 
 // exact midpoint values measured in the Go reference. outStr (optional)

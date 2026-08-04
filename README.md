@@ -93,7 +93,8 @@ CA certificate ([include/mqtt_ca_cert.h](include/mqtt_ca_cert.h)).
   "pressure": "0.00",
   "rain_mm_hr": "0.00",
   "rain_day": "0.00",
-  "river_level": "0.000"
+  "river_level": "0.000",
+  "chip_temp_c": "0.0"
 }
 ```
 
@@ -105,6 +106,9 @@ CA certificate ([include/mqtt_ca_cert.h](include/mqtt_ca_cert.h)).
 > report** (cleared on each successful upload, ~every 15 min — mirrors the Go
 > `RainMM` / WOW `rainin`). `rain_mm_hr` is the last-hour rate (mm/hr).
 > `rain_day` is the running **9am–9am day total** (mm).
+>
+> `chip_temp_c` is the ESP32 internal die temperature (°C, diagnostic only —
+> coarse and uncalibrated, not an ambient/weather reading).
 
 `culverhay/weather/app` keeps the same payload shape for app compatibility but
 uses app-facing wind values:
@@ -157,6 +161,8 @@ online/offline); the `status` command re-emits it on demand.
   "version": "1.2.3",
   "boot_reason": "power-on",
   "reboots": "01,04,02,01,03",
+  "crash": "task=loopTask pc=0x400d1234 cause=28 vaddr=0x00000000 bt=0x400d1234 0x400d5678",
+  "heap_min": 91234,
   "recovery": false,
   "atmosphere": true,
   "rain": true,
@@ -182,6 +188,26 @@ online/offline); the `status` command re-emits it on demand.
 
 `boot_reason` remains the human-readable cause of the **current** boot; `reboots`
 adds the persisted short-code history across power cycles.
+
+`crash` is a decoded summary of the **most recent panic**, extracted from the
+ESP32 core dump the panic handler writes to the `coredump` flash partition
+(enabled by default in arduino-esp32). It is empty until a crash occurs and then
+persists across reboots. `task` is the crashing FreeRTOS task, `pc` the program
+counter, `cause`/`vaddr` the Xtensa exception cause and faulting address (e.g.
+`cause=28` LoadProhibited with `vaddr=0x00000000` = a NULL-pointer read), and
+`bt` a short backtrace. Turn the PCs into file:line with the build's ELF:
+
+```
+xtensa-esp32-elf-addr2line -pfiaC -e .pio/build/esp32/firmware.elf 0x400d1234 0x400d5678
+```
+
+`heap_min` is the lowest free-heap watermark (`esp_get_minimum_free_heap_size()`,
+bytes) seen since boot. It only ever falls, so the retained status is re-sent
+whenever a new low is hit — a steadily shrinking `heap_min` points to a memory
+leak, and values approaching zero explain `abort()` crashes in the `async_tcp`
+web-handler task (a failed allocation becomes `abort()` because the Arduino build
+disables C++ exceptions). Per-minute `Heap: free=… min=… largest=…` lines at
+`/logs` show the live trend and fragmentation (`largest` ≪ `free`).
 
 ## HTTP endpoints (port 80)
 

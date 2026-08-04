@@ -35,4 +35,13 @@ void setPending(Reason reason, const char *detail = "");
 // Comma-separated 2-digit codes, most-recent first, for the MQTT status payload.
 String historyCodes();
 
+// Decoded summary of the most recent crash (panic), extracted from the ESP32
+// core dump written to flash: crashing task, program counter, exception
+// cause/faulting address and a short backtrace of PCs. Empty until a crash has
+// been captured. Decode the PCs with:
+//   xtensa-esp32-elf-addr2line -pfiaC -e .pio/build/<env>/firmware.elf <pc...>
+// Surfaced in the boot log and the MQTT status payload so a headless remote
+// crash can be diagnosed without a serial console.
+String crashDetail();
+
 } // namespace rebootlog

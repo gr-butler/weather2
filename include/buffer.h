@@ -96,8 +96,20 @@ public:
         return data_[index];
     }
 
-    // Copy of the raw backing data plus size and current position. Used by the
-    // gust calculation which walks the buffer directly.
+    // Run `fn(data, size, position)` while holding the buffer lock, giving
+    // read-only access to the backing ring with no copy. Preferred over
+    // getRawData() in hot/async paths: it avoids a per-call std::vector
+    // allocation that otherwise churns and fragments the heap. `fn` must not
+    // call back into this buffer (the lock is not recursive).
+    template <typename Fn>
+    auto withData(Fn &&fn) {
+        std::lock_guard<std::mutex> guard(lock_);
+        return fn(static_cast<const double *>(data_.data()), size_, position_);
+    }
+
+    // Copy of the raw backing data plus size and current position. Retained for
+    // callers/tests that want an owning snapshot; hot paths should use
+    // withData() instead to avoid the allocation.
     std::vector<double> getRawData(int &outSize, int &outPosition) {
         std::lock_guard<std::mutex> guard(lock_);
         outSize = size_;

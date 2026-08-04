@@ -41,7 +41,6 @@ If the ESP32 exposes metrics via HTTP/MQTT, the **JSON payload field names** mus
 | `wind_speed`   | mph   |
 | `wind_gust`    | mph   |
 
-The MQTT topic **`culverhay/weather`** must not be changed.
 
 ---
 

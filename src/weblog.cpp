@@ -68,14 +68,32 @@ uint32_t WebLog::latestSeq() {
 
 String WebLog::jsonSince(uint32_t afterSeq) {
     String out;
-    out.reserve(1024);
-    out += "{\"seq\":";
 
     if (mtx_ == nullptr || xSemaphoreTake(mtx_, portMAX_DELAY) != pdTRUE) {
-        out += "0,\"lines\":[]}";
+        out = "{\"seq\":0,\"lines\":[]}";
         return out;
     }
 
+    // Size the output up front from the lines we will actually emit, so the
+    // String does no incremental reallocation while building. Repeated
+    // append-grows churn and fragment the heap in the async web task, a prime
+    // suspect for the out-of-memory aborts seen there.
+    size_t need = 24; // {"seq":<seq>,"lines":[]}
+    {
+        size_t sizeIdx = (head_ + kMaxLines - count_) % kMaxLines;
+        for (size_t i = 0; i < count_; i++) {
+            const Line &line = lines_[sizeIdx];
+            sizeIdx = (sizeIdx + 1) % kMaxLines;
+            if (line.seq <= afterSeq) {
+                continue;
+            }
+            // {"n":<seq>,"t":"<text>"}, plus slack for JSON escaping.
+            need += strlen(line.text) + 28;
+        }
+    }
+    out.reserve(need);
+
+    out += "{\"seq\":";
     out += seq_;
     out += ",\"lines\":[";
 

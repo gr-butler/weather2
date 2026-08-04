@@ -2,6 +2,8 @@
 
 #include <HTTPClient.h>
 #include <ctype.h>
+#include <esp_heap_caps.h>
+#include <esp_system.h>
 #include <time.h>
 
 #include "constants.h"
@@ -195,6 +197,14 @@ bool Reporting::mqttReconnect() {
 // Build and publish the MQTT JSON payload. Field names + 2-dp string formatting
 // are preserved exactly from the Go dataMap (weather/reporting.go).
 void Reporting::publishMqtt() {
+    // Heap diagnostics: async_tcp aborts have been traced to allocation
+    // failures in the web handlers, so track free/min/largest-block each minute
+    // (visible in the UART + /logs). largest-block far below free = fragmentation.
+    Serial.printf("Heap: free=%u min=%u largest=%u\n",
+                  (unsigned)esp_get_free_heap_size(),
+                  (unsigned)esp_get_minimum_free_heap_size(),
+                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+
     String ip = net::ip().toString();
     double appWindDir = v_.windDir;
     double appWindSpeed = v_.windSpeedMph;
@@ -202,6 +212,10 @@ void Reporting::publishMqtt() {
     if (wind_) {
         wind_->getAppWindSummary(appWindDir, appWindSpeed, appWindGust);
     }
+
+    // ESP32 internal die temperature (diagnostic, not a weather reading). Fast
+    // register read via the Arduino core — non-blocking, coarse/uncalibrated.
+    float chipTempC = temperatureRead();
 
     // Go time format "15:04:05 02/01/2006" => HH:MM:SS DD/MM/YYYY (local time).
     char timeStr[24];
@@ -211,18 +225,18 @@ void Reporting::publishMqtt() {
     snprintf(timeStr, sizeof(timeStr), "%02d:%02d:%02d %02d/%02d/%04d", lt.tm_hour,
              lt.tm_min, lt.tm_sec, lt.tm_mday, lt.tm_mon + 1, lt.tm_year + 1900);
 
-    char payload[384];
+    char payload[448];
     snprintf(payload, sizeof(payload),
              "{\"name\":\"%s\",\"ip_address\":\"%s\",\"time\":\"%s\","
              "\"rain\":\"%.2f\",\"temp\":\"%.2f\",\"windspeed\":\"%.2f\","
              "\"windgust\":\"%.2f\",\"winddir\":\"%.2f\",\"humidity\":\"%.2f\","
              "\"pressure\":\"%.2f\",\"rain_mm_hr\":\"%.2f\",\"rain_day\":\"%.2f\","
-             "\"river_level\":\"%.3f\"}",
+             "\"river_level\":\"%.3f\",\"chip_temp_c\":\"%.1f\"}",
              MqttClientName, ip.c_str(), timeStr, v_.rainMM, v_.tempC,
              v_.windSpeedMph, v_.windGustMph, v_.windDir, v_.humidity,
              v_.pressureHpa, rain_ ? rain_->getRate() : 0.0f,
              rain_ ? rain_->getDayAccumulation() : 0.0f,
-             river_ ? river_->level() : 0.0f);
+             river_ ? river_->level() : 0.0f, chipTempC);
 
     if (mqtt_.publish(MqttTopic, payload, /*retained=*/true)) {
         Serial.printf("MQTT published to %s\n", MqttTopic);
@@ -233,18 +247,18 @@ void Reporting::publishMqtt() {
     // App-only topic: same cadence, but wind fields are smoothed over the last
     // AppWindSummarySeconds seconds (direction circular mean, speed mean, gust
     // peak 3-second average within that window).
-    char appPayload[448];
+    char appPayload[512];
     snprintf(appPayload, sizeof(appPayload),
              "{\"name\":\"%s\",\"ip_address\":\"%s\",\"time\":\"%s\","
              "\"rain\":\"%.2f\",\"temp\":\"%.2f\",\"windspeed\":\"%.2f\","
              "\"windgust\":\"%.2f\",\"winddir\":\"%.2f\",\"humidity\":\"%.2f\","
              "\"pressure\":\"%.2f\",\"rain_mm_hr\":\"%.2f\",\"rain_day\":\"%.2f\","
-             "\"river_level\":\"%.3f\",\"wind_summary_window_s\":%d}",
+             "\"river_level\":\"%.3f\",\"chip_temp_c\":\"%.1f\",\"wind_summary_window_s\":%d}",
              MqttClientName, ip.c_str(), timeStr, v_.rainMM, v_.tempC,
              appWindSpeed, appWindGust, appWindDir, v_.humidity, v_.pressureHpa,
              rain_ ? rain_->getRate() : 0.0f,
              rain_ ? rain_->getDayAccumulation() : 0.0f,
-             river_ ? river_->level() : 0.0f, AppWindSummarySeconds);
+             river_ ? river_->level() : 0.0f, chipTempC, AppWindSummarySeconds);
 
     if (mqtt_.publish(MqttAppTopic, appPayload, /*retained=*/true)) {
         Serial.printf("MQTT published to %s\n", MqttAppTopic);
@@ -513,14 +527,16 @@ void Reporting::handleCommand(String cmd) {
 // readings live on the data topic (culverhay/weather). Publishes only when the
 // payload differs from the last one, unless `force` is set (the `status` command).
 void Reporting::publishStatus(bool force) {
-    char payload[384];
+    char payload[512];
     snprintf(
         payload, sizeof(payload),
         "{\"id\":\"%s\",\"ip\":\"%s\",\"version\":\"%s\",\"boot_reason\":\"%s\","
-        "\"reboots\":\"%s\",\"recovery\":%s,"
+        "\"reboots\":\"%s\",\"crash\":\"%s\",\"heap_min\":%u,\"recovery\":%s,"
         "\"atmosphere\":%s,\"rain\":%s,\"wind\":%s,\"river\":%s}",
         MqttStationId, net::ip().toString().c_str(), _SEMVER_CORE,
         bootReasonString(), rebootlog::historyCodes().c_str(),
+        rebootlog::crashDetail().c_str(),
+        (unsigned)esp_get_minimum_free_heap_size(),
         recoveryMode_ ? "true" : "false",
         (atm_ && atm_->isOnline()) ? "true" : "false",
         (rain_ && rain_->isOnline()) ? "true" : "false",
