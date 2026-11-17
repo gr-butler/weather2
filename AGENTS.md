@@ -74,6 +74,7 @@ Definition (Met Office): *"the maximum 3-second average wind speed occurring in 
 #### Direction
 - Convert the bearing value received over CAN to compass degrees using the **same voltage thresholds** as `voltToDegrees()` in `weather/sensors/Anemometer.go` — the remote node is expected to send a pre-converted ADC voltage or raw ADC counts; either way the same lookup table must be applied.
 - If wind speed is 0, **preserve the last valid direction** (do not report garbage values).
+- **Documented deviation — vane mounting offset:** a user-set offset (degrees, default `0`, stored in NVS, set from the web UI Settings tab) is added to the *filtered* direction in `Anemometer` to correct a vane that is no longer aligned to north. It must stay applied after filtering, never to the buffered samples, and an offset of `0` must leave the output identical to the reference. See README "Wind direction offset".
 
 ---
 

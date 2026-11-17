@@ -381,3 +381,49 @@ inline double windVoltToDegrees(double v, const char **outStr = nullptr) {
     }
     return deg;
 }
+
+// --- Vane mounting offset ----------------------------------------------------
+// Not in the Go reference: the masthead vane can end up no longer aligned to
+// north (it has turned on its pole), so a user-set offset is added to the
+// direction this station reports. It is applied to the *filtered* result, never
+// to the buffered samples, because windDirectionFiltered() depends on those
+// being the vane's 16 discrete bearings. An offset of 0 leaves every value
+// exactly as the reference produces it.
+
+// Normalise an offset in whole degrees to (-180, 180].
+inline int windNormalizeOffsetDeg(int deg) {
+    int d = deg % 360;
+    if (d > 180) {
+        d -= 360;
+    } else if (d <= -180) {
+        d += 360;
+    }
+    return d;
+}
+
+// Rotate a bearing clockwise by offsetDeg; result in [0, 360).
+inline double windApplyDirectionOffset(double deg, int offsetDeg) {
+    if (offsetDeg == 0) {
+        return deg;
+    }
+    double d = std::fmod(deg + offsetDeg, 360.0);
+    if (d < 0.0) {
+        d += 360.0;
+    }
+    return d;
+}
+
+// 16-point compass name for a bearing in degrees (any finite value).
+inline const char *windCompassPoint(double deg) {
+    static const char *const kPoints[16] = {
+        "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+        "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"};
+    if (!std::isfinite(deg)) {
+        return "--";
+    }
+    double d = std::fmod(deg, 360.0);
+    if (d < 0.0) {
+        d += 360.0;
+    }
+    return kPoints[static_cast<int>(d / 22.5 + 0.5) % 16];
+}

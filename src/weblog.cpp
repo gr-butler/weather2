@@ -66,7 +66,7 @@ uint32_t WebLog::latestSeq() {
     return s;
 }
 
-String WebLog::jsonSince(uint32_t afterSeq) {
+String WebLog::jsonSince(uint32_t afterSeq, size_t maxLines) {
     String out;
 
     if (mtx_ == nullptr || xSemaphoreTake(mtx_, portMAX_DELAY) != pdTRUE) {
@@ -80,6 +80,7 @@ String WebLog::jsonSince(uint32_t afterSeq) {
     // suspect for the out-of-memory aborts seen there.
     size_t need = 24; // {"seq":<seq>,"lines":[]}
     {
+        size_t sized = 0;
         size_t sizeIdx = (head_ + kMaxLines - count_) % kMaxLines;
         for (size_t i = 0; i < count_; i++) {
             const Line &line = lines_[sizeIdx];
@@ -87,6 +88,10 @@ String WebLog::jsonSince(uint32_t afterSeq) {
             if (line.seq <= afterSeq) {
                 continue;
             }
+            if (maxLines != 0 && sized >= maxLines) {
+                break;
+            }
+            sized++;
             // {"n":<seq>,"t":"<text>"}, plus slack for JSON escaping.
             need += strlen(line.text) + 28;
         }
@@ -98,6 +103,7 @@ String WebLog::jsonSince(uint32_t afterSeq) {
     out += ",\"lines\":[";
 
     bool first = true;
+    size_t emitted = 0;
     // Oldest valid line sits count_ slots behind head_.
     size_t idx = (head_ + kMaxLines - count_) % kMaxLines;
     for (size_t i = 0; i < count_; i++) {
@@ -106,6 +112,10 @@ String WebLog::jsonSince(uint32_t afterSeq) {
         if (line.seq <= afterSeq) {
             continue;
         }
+        if (maxLines != 0 && emitted >= maxLines) {
+            break;
+        }
+        emitted++;
         if (!first) {
             out += ',';
         }

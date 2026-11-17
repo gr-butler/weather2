@@ -124,6 +124,39 @@ void test_direction_filtered_follows_adjacent_wander(void) {
     TEST_ASSERT_TRUE((filtered >= 67.5) && (filtered <= 90.0));
 }
 
+void test_direction_offset_zero_is_identity(void) {
+    // No offset must leave the reference output untouched, bit for bit.
+    TEST_ASSERT_EQUAL_DOUBLE(167.29, windApplyDirectionOffset(167.29, 0));
+    TEST_ASSERT_EQUAL_DOUBLE(0.0, windApplyDirectionOffset(0.0, 0));
+}
+
+void test_direction_offset_wraps_both_ways(void) {
+    TEST_ASSERT_EQUAL_DOUBLE(197.5, windApplyDirectionOffset(167.5, 30));
+    TEST_ASSERT_EQUAL_DOUBLE(10.0, windApplyDirectionOffset(350.0, 20));   // past north
+    TEST_ASSERT_EQUAL_DOUBLE(350.0, windApplyDirectionOffset(10.0, -20));  // back past north
+    TEST_ASSERT_EQUAL_DOUBLE(0.0, windApplyDirectionOffset(330.0, 30));    // lands on 0, not 360
+    TEST_ASSERT_EQUAL_DOUBLE(90.0, windApplyDirectionOffset(270.0, 180));
+}
+
+void test_direction_offset_normalised(void) {
+    TEST_ASSERT_EQUAL_INT(0, windNormalizeOffsetDeg(0));
+    TEST_ASSERT_EQUAL_INT(0, windNormalizeOffsetDeg(360));
+    TEST_ASSERT_EQUAL_INT(-30, windNormalizeOffsetDeg(330));
+    TEST_ASSERT_EQUAL_INT(30, windNormalizeOffsetDeg(-330));
+    TEST_ASSERT_EQUAL_INT(180, windNormalizeOffsetDeg(180));
+    TEST_ASSERT_EQUAL_INT(180, windNormalizeOffsetDeg(-180));
+    TEST_ASSERT_EQUAL_INT(-179, windNormalizeOffsetDeg(181));
+}
+
+void test_compass_point(void) {
+    TEST_ASSERT_EQUAL_STRING("N", windCompassPoint(0.0));
+    TEST_ASSERT_EQUAL_STRING("N", windCompassPoint(359.0));
+    TEST_ASSERT_EQUAL_STRING("NNE", windCompassPoint(11.25)); // boundary rounds up
+    TEST_ASSERT_EQUAL_STRING("SSE", windCompassPoint(157.5));
+    TEST_ASSERT_EQUAL_STRING("NNW", windCompassPoint(-22.5));
+    TEST_ASSERT_EQUAL_STRING("--", windCompassPoint(NAN));
+}
+
 int main(int, char **) {
     UNITY_BEGIN();
     RUN_TEST(test_speed_zero_then_one_pulse);
@@ -135,5 +168,9 @@ int main(int, char **) {
     RUN_TEST(test_direction_rolling_wraparound);
     RUN_TEST(test_direction_filtered_rejects_spin_scatter);
     RUN_TEST(test_direction_filtered_follows_adjacent_wander);
+    RUN_TEST(test_direction_offset_zero_is_identity);
+    RUN_TEST(test_direction_offset_wraps_both_ways);
+    RUN_TEST(test_direction_offset_normalised);
+    RUN_TEST(test_compass_point);
     return UNITY_END();
 }

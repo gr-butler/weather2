@@ -57,6 +57,13 @@ public:
     int getDirBufSeconds() const { return dirBufSeconds_; }
     void setDirBufSeconds(int s);
 
+    // Vane mounting offset in whole degrees, clockwise positive, (-180, 180].
+    // Added to every direction this class reports, so all consumers (web,
+    // Prometheus, MQTT, WOW, telnet) are corrected in one place. Persisted to
+    // NVS. Safe to call from the async web task as well as loop().
+    int getDirOffsetDeg() const { return dirOffsetDeg_; }
+    void setDirOffsetDeg(int deg);
+
     double getSpeed() {
         MutexGuard g(mutex_);
         return windSpeedMph(speedBuf_);
@@ -65,19 +72,25 @@ public:
         MutexGuard g(mutex_);
         return windGustMph(gustBuf_, lastGust_);
     }
-    double getDirection() {
+    // Direction as the vane reports it, before the mounting offset.
+    double getRawDirection() {
         MutexGuard g(mutex_);
         return windDirectionFiltered(
             dirBuf_, WindSamplesPerSecond * dirAvgSeconds_);
     }
+    double getDirection() {
+        return windApplyDirectionOffset(getRawDirection(), dirOffsetDeg_);
+    }
     void getAppWindSummary(double &dirDeg, double &speedMph, double &gustMph) {
         MutexGuard g(mutex_);
         const int window = WindSamplesPerSecond * appSummarySeconds_;
-        dirDeg = windDirectionFiltered(dirBuf_, window);
+        dirDeg = windApplyDirectionOffset(windDirectionFiltered(dirBuf_, window),
+                                          dirOffsetDeg_);
         speedMph = windSpeedMphLastWindow(speedBuf_, window);
         gustMph = windGustMphLastWindow(gustBuf_, window, lastAppGust_);
     }
-    const char *getDirectionString() const { return dirStr_; }
+    // 16-point compass name of getDirection().
+    const char *getDirectionString() { return windCompassPoint(getDirection()); }
     bool isOnline() const { return online_; }
 
 private:
@@ -110,6 +123,7 @@ private:
     int dirAvgSeconds_ = WindDirectionAverageSeconds;
     int appSummarySeconds_ = AppWindSummarySeconds;
     int dirBufSeconds_ = WindBufferLengthSeconds;
+    int dirOffsetDeg_ = 0;
     Preferences windPrefs_;
 
     SampleBuffer speedBuf_;
@@ -118,7 +132,6 @@ private:
 
     double lastGust_ = 0.0;
     double lastAppGust_ = 0.0;
-    const char *dirStr_ = "N";
     double lastDirection_ = 0.0;
 
     // Accumulated within the current 250 ms window.

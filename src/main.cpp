@@ -52,7 +52,7 @@ RiverMonitor riverMonitor;
 #endif
 
 Reporting reporting(&atmosphere, &rainmeter, &anemometer, &riverMonitor);
-WeatherWebServer webServer(&atmosphere, &rainmeter, &anemometer, &riverMonitor);
+WeatherWebServer webServer(&atmosphere, &rainmeter, &anemometer, &riverMonitor, &reporting);
 TelnetServer telnet(&atmosphere, &rainmeter, &anemometer, &riverMonitor, &reporting);
 
 unsigned long lastHeartbeatMs = 0;
@@ -163,7 +163,7 @@ void setup() {
     // River monitor: polls the Environment Agency flood API (needs network).
     riverMonitor.begin();
 
-    // Web service: live JSON (/) + Prometheus (/metrics), plus OTA at /update.
+    // Web service: tabbed UI + live JSON (/) + Prometheus (/metrics), plus OTA at /update.
     webServer.begin();
     ElegantOTA.begin(&webServer.server());
     // Tag the imminent post-OTA auto-reboot so it shows as "firmware upgrade".

@@ -31,10 +31,14 @@ public:
     // Sequence number of the most recently completed line (0 if none yet).
     uint32_t latestSeq();
 
-    // Build a JSON document of every buffered line with seq > afterSeq:
+    // Build a JSON document of the buffered lines with seq > afterSeq, oldest
+    // first:
     //   {"seq":<latest>,"lines":[{"n":<seq>,"t":"<text>"},...]}
-    // Pass afterSeq = 0 to fetch the whole buffer.
-    String jsonSince(uint32_t afterSeq);
+    // Pass afterSeq = 0 to start from the oldest buffered line. maxLines caps
+    // how many lines one call returns (0 = no cap), so a caller can page
+    // through the buffer in small chunks rather than one large allocation:
+    // continue from the "n" of the last line returned until it reaches "seq".
+    String jsonSince(uint32_t afterSeq, size_t maxLines = 0);
 
 private:
     struct Line {

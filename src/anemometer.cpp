@@ -14,6 +14,7 @@ constexpr const char *kWindCfgNamespace = "windcfg";
 constexpr const char *kKeyDirAvgSec = "dirAvgSec";
 constexpr const char *kKeyAppSumSec = "appSumSec";
 constexpr const char *kKeyDirBufSec = "dirBufSec";
+constexpr const char *kKeyDirOffset = "dirOffset";
 // Maximum direction buffer: 300 s × 4 Hz = 1200 samples ≈ 10 KB of doubles.
 // Speed and gust buffers are fixed at WindBufferSamples (240) and are not
 // resized — their size is mandated by the rolling-average maths (AGENTS.md Rule 2).
@@ -56,6 +57,7 @@ void Anemometer::loadWindConfig() {
     dirAvgSeconds_     = windPrefs_.getInt(kKeyDirAvgSec, WindDirectionAverageSeconds);
     appSummarySeconds_ = windPrefs_.getInt(kKeyAppSumSec, AppWindSummarySeconds);
     dirBufSeconds_     = windPrefs_.getInt(kKeyDirBufSec, WindBufferLengthSeconds);
+    dirOffsetDeg_      = windNormalizeOffsetDeg(windPrefs_.getInt(kKeyDirOffset, 0));
     windPrefs_.end();
     // Clamp to valid range in case NVS holds a stale/out-of-range value.
     dirBufSeconds_     = max(1, min(dirBufSeconds_,     kDirBufMaxSeconds));
@@ -65,8 +67,8 @@ void Anemometer::loadWindConfig() {
     if (dirBufSeconds_ != WindBufferLengthSeconds) {
         dirBuf_.resize(dirBufSeconds_ * WindSamplesPerSecond);
     }
-    Serial.printf("Wind config: dir_avg=%ds dir_buf=%ds app_window=%ds\n",
-                  dirAvgSeconds_, dirBufSeconds_, appSummarySeconds_);
+    Serial.printf("Wind config: dir_avg=%ds dir_buf=%ds app_window=%ds dir_offset=%ddeg\n",
+                  dirAvgSeconds_, dirBufSeconds_, appSummarySeconds_, dirOffsetDeg_);
 }
 
 void Anemometer::saveWindConfig() {
@@ -124,6 +126,20 @@ void Anemometer::setDirBufSeconds(int s) {
     saveWindConfig();
     Serial.printf("Wind dir_buf set to %ds (%d samples, buffer reset)\n",
                   s, s * WindSamplesPerSecond);
+}
+
+void Anemometer::setDirOffsetDeg(int deg) {
+    const int offset = windNormalizeOffsetDeg(deg);
+    const int previous = dirOffsetDeg_;
+    dirOffsetDeg_ = offset;
+    // This setter is reached from the async web task, so it uses its own
+    // Preferences handle rather than windPrefs_, which the loop-task setters
+    // (telnet) share. NVS itself is thread-safe.
+    Preferences prefs;
+    prefs.begin(kWindCfgNamespace, /*readOnly=*/false);
+    prefs.putInt(kKeyDirOffset, offset);
+    prefs.end();
+    Serial.printf("Wind dir_offset %ddeg -> %ddeg (saved to NVS)\n", previous, offset);
 }
 
 bool Anemometer::begin() {
@@ -246,7 +262,7 @@ void Anemometer::processFrame(const twai_message_t &msg) {
     lastFrameMs_ = millis();
     haveFrameEver_ = true;
     // Keep the most recent direction reading for this window.
-    pendingDirection_ = windVoltToDegrees(windAdcToVolts(frame.adcRaw), &dirStr_);
+    pendingDirection_ = windVoltToDegrees(windAdcToVolts(frame.adcRaw));
     haveDirection_ = true;
 }
 

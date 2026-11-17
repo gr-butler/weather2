@@ -53,6 +53,11 @@ public:
     const WeatherValues &values() const { return v_; }
     bool mqttConnected() { return mqtt_.connected(); }
 
+    // MQTT link state as last seen by service(). Unlike mqttConnected() this
+    // does not touch the client, so it is safe to call from another task (the
+    // async web server).
+    bool mqttLinkUp() const { return wasConnected_; }
+
     // Recovery mode: when true the main loop suspends all sensor processing and
     // only MQTT (command/control) + OTA stay alive. Toggled by the "recover" /
     // "resume" MQTT commands.

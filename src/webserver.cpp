@@ -2,30 +2,69 @@
 
 #include <time.h>
 
+#include "net.h"
+#include "reboot_log.h"
+#include "reset_reason.h"
+#include "version.h"
+#include "web_ui.h"
 #include "weblog.h"
 #define Serial Log // capture Serial output for the /logs web view
 
 // Ported from the HTTP handler + Prometheus metrics in weather/main.go.
 
 WeatherWebServer::WeatherWebServer(Atmosphere *atm, Rainmeter *rain,
-                                   Anemometer *wind, RiverMonitor *river)
-    : server_(80), atm_(atm), rain_(rain), wind_(wind), river_(river) {}
+                                   Anemometer *wind, RiverMonitor *river,
+                                   Reporting *reporting)
+    : server_(80), atm_(atm), rain_(rain), wind_(wind), river_(river),
+      reporting_(reporting) {}
 
 void WeatherWebServer::begin() {
+    // The reboot history only changes at boot, so read it from NVS once here
+    // rather than on the AsyncTCP task for every /system.json request.
+    rebootHistory_ = rebootlog::historyCodes();
+
     server_.on("/", HTTP_GET,
                [this](AsyncWebServerRequest *r) { handleRoot(r); });
+    server_.on("/data.json", HTTP_GET,
+               [this](AsyncWebServerRequest *r) { handleData(r); });
+    server_.on("/system.json", HTTP_GET,
+               [this](AsyncWebServerRequest *r) { handleSystem(r); });
+    server_.on("/settings.json", HTTP_GET,
+               [this](AsyncWebServerRequest *r) { handleSettings(r); });
+    server_.on("/settings.json", HTTP_POST,
+               [this](AsyncWebServerRequest *r) { handleSettingsPost(r); });
     server_.on("/metrics", HTTP_GET,
                [this](AsyncWebServerRequest *r) { handleMetrics(r); });
+    // The log viewer is now a tab of the UI; keep old /logs bookmarks working.
     server_.on("/logs", HTTP_GET,
-               [this](AsyncWebServerRequest *r) { handleLogsPage(r); });
+               [](AsyncWebServerRequest *r) { r->redirect("/#logs"); });
     server_.on("/logs.json", HTTP_GET,
                [this](AsyncWebServerRequest *r) { handleLogsJson(r); });
     server_.begin();
-    Serial.println("HTTP server started on :80 (/, /metrics, /logs)");
+    Serial.println("HTTP server started on :80 (web UI at /, /metrics)");
 }
 
-// GET / — live JSON payload (mirrors the Go `webdata` struct + handler).
+// GET / — the tabbed web UI for browsers. A client that does not ask for HTML
+// (curl, scripts, anything written against the Go reference) still receives the
+// JSON payload this path has always returned.
 void WeatherWebServer::handleRoot(AsyncWebServerRequest *request) {
+    const AsyncWebHeader *accept = request->getHeader("Accept");
+    if (accept == nullptr || accept->value().indexOf("text/html") < 0) {
+        handleData(request);
+        return;
+    }
+    // Pointer + length overload: the page is streamed from flash in chunks
+    // instead of being copied into a heap String.
+    AsyncWebServerResponse *response = request->beginResponse(
+        200, "text/html; charset=utf-8",
+        reinterpret_cast<const uint8_t *>(kWebUiHtml), kWebUiHtmlLen);
+    response->addHeader("Cache-Control", "no-cache");
+    response->addHeader("Vary", "Accept");
+    request->send(response);
+}
+
+// GET /data.json — live JSON payload (mirrors the Go `webdata` struct + handler).
+void WeatherWebServer::handleData(AsyncWebServerRequest *request) {
     float pressure = 0.0f, humidity = 0.0f;
     if (atm_) {
         atm_->getHumidityAndPressure(pressure, humidity);
@@ -46,6 +85,9 @@ void WeatherWebServer::handleRoot(AsyncWebServerRequest *request) {
     bool windOk = wind_ && wind_->isOnline();
     bool rainOk = rain_ && rain_->isOnline();
     bool riverOk = river_ && river_->lastScrapeSuccess();
+    // Last known river level (metres). Additive, like `status`; it stays at
+    // the last good value when a scrape fails, so read it with status.river.
+    double riverLevel = river_ ? river_->level() : 0.0;
 
     // Go uses time.RFC822 = "02 Jan 06 15:04 MST".
     char timeStr[40];
@@ -61,15 +103,90 @@ void WeatherWebServer::handleRoot(AsyncWebServerRequest *request) {
              "{\"time\":\"%s\",\"hiResTemp_C\":%.2f,\"humidity_RH\":%.2f,"
              "\"pressure_hPa\":%.2f,\"rain_mm_hr\":%.2f,\"rain_rate\":%.2f,"
              "\"rain_day\":%.2f,\"wind_dir\":%.2f,\"wind_speed\":%.2f,"
-             "\"wind_gust\":%.2f,"
+             "\"wind_gust\":%.2f,\"river_level\":%.3f,"
              "\"status\":{\"pressure_humidity\":%s,\"temperature\":%s,"
              "\"wind\":%s,\"rain\":%s,\"river\":%s}}",
              timeStr, tempC, humidity, pressure, rainHr, 0.0, rainDay, windDir,
-             windSpeed, windGust, phOk ? "true" : "false",
+             windSpeed, windGust, riverLevel, phOk ? "true" : "false",
              tempOk ? "true" : "false", windOk ? "true" : "false",
              rainOk ? "true" : "false", riverOk ? "true" : "false");
 
     request->send(200, "application/json", body);
+}
+
+// GET /system.json — device state for the Settings tab. Everything here is
+// safe to read from the AsyncTCP task: no I2C, no NVS, no MQTT client calls.
+void WeatherWebServer::handleSystem(AsyncWebServerRequest *request) {
+    bool mqttUp = reporting_ && reporting_->mqttLinkUp();
+    bool recovery = reporting_ && reporting_->isRecoveryMode();
+
+    char body[512];
+    snprintf(body, sizeof(body),
+             "{\"version\":\"%s\",\"build\":%d,\"git\":\"%s\",\"uptime_s\":%lu,"
+             "\"iface\":\"%s\",\"ip\":\"%s\",\"rssi\":%d,\"mqtt\":%s,"
+             "\"recovery\":%s,\"heap_free\":%u,\"heap_min\":%u,"
+             "\"heap_largest\":%u,\"boot_reason\":\"%s\",\"reboots\":\"%s\"}",
+             _SEMVER_CORE, static_cast<int>(_VERSION_BUILD), _VERSION_GITHASH,
+             millis() / 1000UL, net::iface(), net::ip().toString().c_str(),
+             net::rssi(), mqttUp ? "true" : "false",
+             recovery ? "true" : "false",
+             static_cast<unsigned>(ESP.getFreeHeap()),
+             static_cast<unsigned>(ESP.getMinFreeHeap()),
+             static_cast<unsigned>(ESP.getMaxAllocHeap()), bootReasonString(),
+             rebootHistory_.c_str());
+
+    request->send(200, "application/json", body);
+}
+
+// GET /settings.json — the user-adjustable settings, plus the live wind
+// direction before and after the mounting offset so the Settings tab can show
+// what a new offset would do.
+void WeatherWebServer::handleSettings(AsyncWebServerRequest *request) {
+    int offset = wind_ ? wind_->getDirOffsetDeg() : 0;
+    double raw = wind_ ? wind_->getRawDirection() : 0.0;
+    bool windOk = wind_ && wind_->isOnline();
+
+    char body[160];
+    snprintf(body, sizeof(body),
+             "{\"wind_dir_offset\":%d,\"wind_dir_raw\":%.1f,\"wind_dir\":%.1f,"
+             "\"wind_online\":%s}",
+             offset, raw, windApplyDirectionOffset(raw, offset),
+             windOk ? "true" : "false");
+
+    request->send(200, "application/json", body);
+}
+
+// POST /settings.json — change a setting (form-encoded body). Replies with the
+// same document as the GET so the caller sees the value actually stored.
+void WeatherWebServer::handleSettingsPost(AsyncWebServerRequest *request) {
+    // A web page on another site can make a browser send a plain form post
+    // here, but it cannot add a custom header without a CORS preflight, which
+    // this server never grants. Requiring one stops a stray page changing
+    // settings behind the user's back.
+    if (!request->hasHeader("X-Requested-With")) {
+        request->send(403, "text/plain", "X-Requested-With header required");
+        return;
+    }
+    if (!request->hasParam("wind_dir_offset", /*post=*/true)) {
+        request->send(400, "text/plain", "no known setting in request");
+        return;
+    }
+    if (!wind_) {
+        request->send(503, "text/plain", "wind sensor not available");
+        return;
+    }
+
+    const String &value = request->getParam("wind_dir_offset", true)->value();
+    char *end = nullptr;
+    long deg = strtol(value.c_str(), &end, 10);
+    if (value.length() == 0 || *end != '\0' || deg < -360 || deg > 360) {
+        request->send(400, "text/plain",
+                      "wind_dir_offset must be a whole number of degrees from "
+                      "-360 to 360");
+        return;
+    }
+    wind_->setDirOffsetDeg(static_cast<int>(deg));
+    handleSettings(request);
 }
 
 // GET /metrics — Prometheus text exposition (metric names/types match main.go).
@@ -151,106 +268,21 @@ void WeatherWebServer::handleMetrics(AsyncWebServerRequest *request) {
     request->send(response);
 }
 
-// GET /logs.json?after=<seq> — new log lines since the given sequence number.
+// GET /logs.json?after=<seq>[&limit=<n>] — log lines newer than the given
+// sequence number, oldest first. `limit` caps the lines per response so the
+// Logs tab pages through the buffer instead of pulling all of it at once: the
+// whole 200-line buffer is ~15 KB of JSON and is held twice while sending.
 void WeatherWebServer::handleLogsJson(AsyncWebServerRequest *request) {
     uint32_t after = 0;
     if (request->hasParam("after")) {
         after = static_cast<uint32_t>(
             strtoul(request->getParam("after")->value().c_str(), nullptr, 10));
     }
-    request->send(200, "application/json", Log.jsonSince(after));
-}
-
-// GET /logs — self-contained live log viewer that polls /logs.json.
-void WeatherWebServer::handleLogsPage(AsyncWebServerRequest *request) {
-    static const char kPage[] PROGMEM = R"HTML(<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>weather2 logs</title>
-<style>
-  :root { color-scheme: dark; }
-  body { margin: 0; font-family: system-ui, sans-serif; background: #0b0f14; color: #d7dde5; }
-  header { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap;
-           padding: .6rem .9rem; background: #131a22; border-bottom: 1px solid #223; position: sticky; top: 0; }
-  header h1 { font-size: 1rem; margin: 0; font-weight: 600; }
-  header .grow { flex: 1; }
-  header label { font-size: .85rem; display: inline-flex; gap: .3rem; align-items: center; }
-  button, input[type=text] { background: #1c2530; color: #d7dde5; border: 1px solid #33404f;
-           border-radius: 6px; padding: .35rem .6rem; font-size: .85rem; }
-  button:hover { background: #263143; cursor: pointer; }
-  #status { font-size: .8rem; color: #8b97a5; }
-  #log { padding: .5rem .9rem; font-family: ui-monospace, Menlo, Consolas, monospace;
-         font-size: .82rem; line-height: 1.4; white-space: pre-wrap; word-break: break-word; }
-  #log div { border-bottom: 1px solid #10161d; padding: 1px 0; }
-  #log div:nth-child(odd) { background: #0e141b; }
-</style>
-</head>
-<body>
-<header>
-  <h1>weather2 &middot; live log</h1>
-  <span id="status">connecting…</span>
-  <span class="grow"></span>
-  <input id="filter" type="text" placeholder="filter…" autocomplete="off">
-  <label><input id="auto" type="checkbox" checked> autoscroll</label>
-  <button id="pause">Pause</button>
-  <button id="clear">Clear</button>
-</header>
-<div id="log"></div>
-<script>
-  const logEl = document.getElementById('log');
-  const statusEl = document.getElementById('status');
-  const autoEl = document.getElementById('auto');
-  const filterEl = document.getElementById('filter');
-  const pauseBtn = document.getElementById('pause');
-  let after = 0, paused = false, filter = '';
-
-  filterEl.addEventListener('input', () => {
-    filter = filterEl.value.toLowerCase();
-    for (const div of logEl.children) {
-      div.style.display = (!filter || div.textContent.toLowerCase().includes(filter)) ? '' : 'none';
+    size_t limit = 0;
+    if (request->hasParam("limit")) {
+        limit = static_cast<size_t>(
+            strtoul(request->getParam("limit")->value().c_str(), nullptr, 10));
     }
-  });
-  document.getElementById('clear').onclick = () => { logEl.innerHTML = ''; };
-  pauseBtn.onclick = () => {
-    paused = !paused;
-    pauseBtn.textContent = paused ? 'Resume' : 'Pause';
-  };
-
-  function append(lines) {
-    const atBottom = autoEl.checked;
-    const frag = document.createDocumentFragment();
-    for (const l of lines) {
-      const div = document.createElement('div');
-      div.textContent = l.t;
-      if (filter && !l.t.toLowerCase().includes(filter)) div.style.display = 'none';
-      frag.appendChild(div);
-    }
-    logEl.appendChild(frag);
-    while (logEl.children.length > 1000) logEl.removeChild(logEl.firstChild);
-    if (atBottom) window.scrollTo(0, document.body.scrollHeight);
-  }
-
-  async function poll() {
-    if (!paused) {
-      try {
-        const r = await fetch('/logs.json?after=' + after);
-        const d = await r.json();
-        if (d.seq < after) after = 0;      // device rebooted — resync
-        if (d.lines && d.lines.length) { append(d.lines); }
-        after = d.seq;
-        statusEl.textContent = 'live · ' + new Date().toLocaleTimeString();
-      } catch (e) {
-        statusEl.textContent = 'disconnected — retrying…';
-      }
-    }
-    setTimeout(poll, 1000);
-  }
-  poll();
-</script>
-</body>
-</html>)HTML";
-    request->send(200, "text/html", kPage);
+    request->send(200, "application/json", Log.jsonSince(after, limit));
 }
 

@@ -239,18 +239,48 @@ bytes) seen since boot. It only ever falls, so the retained status is re-sent
 whenever a new low is hit — a steadily shrinking `heap_min` points to a memory
 leak, and values approaching zero explain `abort()` crashes in the `async_tcp`
 web-handler task (a failed allocation becomes `abort()` because the Arduino build
-disables C++ exceptions). Per-minute `Heap: free=… min=… largest=…` lines at
-`/logs` show the live trend and fragmentation (`largest` ≪ `free`).
+disables C++ exceptions). Per-minute `Heap: free=… min=… largest=…` lines on the
+Logs tab show the live trend and fragmentation (`largest` ≪ `free`).
 
 ## HTTP endpoints (port 80)
 
-| Method | Path       | Response | Description |
-|--------|------------|----------|-------------|
-| GET    | `/`        | JSON     | Current readings (web dashboard payload) |
-| GET    | `/metrics` | text     | Prometheus exposition |
-| —      | `/update`  | —        | ElegantOTA firmware update UI |
+| Method | Path           | Response | Description |
+|--------|----------------|----------|-------------|
+| GET    | `/`            | HTML / JSON | Web UI in a browser; the readings JSON for any other client (see below) |
+| GET    | `/data.json`   | JSON     | Current readings (the payload below) |
+| GET    | `/system.json` | JSON     | Device state shown on the Settings tab |
+| GET    | `/settings.json` | JSON   | User-adjustable settings (wind direction offset) |
+| POST   | `/settings.json` | JSON   | Change a setting (see below) |
+| GET    | `/logs.json`   | JSON     | Buffered log lines (`?after=<seq>&limit=<n>`) |
+| GET    | `/logs`        | redirect | Old log-viewer URL; redirects to the Logs tab (`/#logs`) |
+| GET    | `/metrics`     | text     | Prometheus exposition |
+| —      | `/update`      | —        | ElegantOTA firmware update UI |
 
-### `GET /` payload
+### Web UI (`GET /`)
+
+Opening `http://<station>/` in a browser shows a single page with three tabs
+(deep links: `/#live`, `/#logs`, `/#settings`):
+
+- **Live** — dials for temperature, wind speed (with a gust marker), wind
+  direction (compass, direction the wind is coming *from*), rain in the last
+  hour (plus today's total), river level, humidity and pressure, and a health
+  chip per sensor. A sensor that is offline shows `–` rather than a zero.
+- **Logs** — the live log viewer (filter, autoscroll, pause, clear).
+- **Settings** — firmware version, the link to the OTA update page, device
+  state (uptime, network, MQTT, heap, boot reason, reboot history), and the
+  wind direction correction (below).
+
+The page is self-contained (no external resources) and is served straight from
+flash. Only the tab on screen polls the device (Live every 3 s, Logs every 1 s,
+Settings every 5 s), and polling stops while the browser tab is in the
+background.
+
+`GET /` chooses by the request's `Accept` header: a client that asks for
+`text/html` (a browser) gets the UI; anything else (`curl`, scripts) gets the
+readings JSON, exactly as `GET /` always has. `/data.json` returns that JSON
+regardless of `Accept`.
+
+### `GET /data.json` payload
 
 ```json
 {
@@ -264,6 +294,7 @@ disables C++ exceptions). Per-minute `Heap: free=… min=… largest=…` lines 
   "wind_dir": 0.00,
   "wind_speed": 0.00,
   "wind_gust": 0.00,
+  "river_level": 0.000,
   "status": {
     "pressure_humidity": true,
     "temperature": true,
@@ -278,6 +309,90 @@ The `status` object reports each sensor's live health — `true` = active/workin
 `false` = inactive/not working. `pressure_humidity` and `temperature` come from
 the atmospheric sensors (BME280 / MCP9808), `wind` is the masthead CAN node,
 `rain` is the tipping-bucket meter, and `river` reflects the last EA API scrape.
+
+`river_level` is the last known river level in metres. It keeps its last good
+value when a scrape fails, so read it together with `status.river`. Like
+`status`, it is an addition to the Go reference payload; the original field
+names and units are unchanged.
+
+### `GET /system.json` payload
+
+```json
+{
+  "version": "1.2.3",
+  "build": 92,
+  "git": "768036d",
+  "uptime_s": 12345,
+  "iface": "eth",
+  "ip": "0.0.0.0",
+  "rssi": 0,
+  "mqtt": true,
+  "recovery": false,
+  "heap_free": 62200,
+  "heap_min": 41000,
+  "heap_largest": 57332,
+  "boot_reason": "power-on",
+  "reboots": "01,04,02,01,03"
+}
+```
+
+`iface` is `eth`, `wifi` or `none`; `rssi` is in dBm and is 0 unless WiFi is
+connected. Heap figures are in bytes (`heap_min` is the lowest free heap since
+boot, `heap_largest` the largest free block). `boot_reason` and `reboots` have
+the same meaning as in the MQTT `status` payload.
+
+### Wind direction offset (`/settings.json`)
+
+If the masthead vane is no longer aligned to north, set an offset instead of
+climbing the pole. The offset (whole degrees, clockwise positive) is added to
+the wind direction inside the anemometer, so **every** output is corrected: the
+web UI, `/data.json`, the `winddirection` metric, both MQTT telemetry topics,
+the Met Office upload and the telnet console. It is stored in NVS and survives
+reboots and firmware updates. An offset of `0` (the default) leaves the
+direction exactly as the Go reference calculates it.
+
+The offset is applied to the filtered direction, not to the buffered samples:
+the spin-scatter filter relies on those being the vane's 16 discrete bearings.
+
+Set it on the **Settings** tab, which shows the live sensor bearing and what it
+will be reported as, so the value can be adjusted until it matches the real
+wind. Or use the API:
+
+```json
+{
+  "wind_dir_offset": 30,
+  "wind_dir_raw": 167.5,
+  "wind_dir": 197.5,
+  "wind_online": true
+}
+```
+
+`GET /settings.json` returns the document above: the stored offset, the
+direction before (`wind_dir_raw`) and after (`wind_dir`) the offset, and whether
+the wind sensor is online.
+
+`POST /settings.json` takes a form-encoded `wind_dir_offset` from `-360` to
+`360` and replies with the same document. The value is stored normalised to
+`-179`…`180`, so `330` is stored as `-30`. The request must carry an
+`X-Requested-With` header (any value), which stops another web page changing
+settings through the browser:
+
+```bash
+curl -X POST -H "X-Requested-With: curl" -d "wind_dir_offset=30" http://<station>/settings.json
+```
+
+The web UI and this endpoint have no login; anyone on the LAN can change the
+offset, as they already can use `/update` and the telnet console.
+
+### `GET /logs.json`
+
+Returns the buffered log lines with a sequence number greater than `after`,
+oldest first: `{"seq":<latest>,"lines":[{"n":<seq>,"t":"<text>"}]}`. The device
+keeps the last 200 lines. `limit` caps the lines per response; to page through
+the buffer, repeat with `after` set to the `n` of the last line received until
+it reaches `seq`. The Logs tab uses `limit=50`, because the whole buffer is
+about 15 KB of JSON and the device holds two copies of a response while sending
+it. Without `limit` every matching line is returned.
 
 ### `GET /metrics` (Prometheus — names locked, AGENTS.md Rule 1)
 
@@ -359,7 +474,8 @@ scrape_configs:
 | `src/main.cpp`             | Setup + cooperative main loop |
 | `src/net.cpp`              | Ethernet-primary / WiFi-fallback networking |
 | `src/reporting.cpp`        | MQTT data + control plane, WOW upload, scheduling |
-| `src/webserver.cpp`        | HTTP `/` and `/metrics` |
+| `src/webserver.cpp`        | HTTP routes: `/`, `/data.json`, `/system.json`, `/settings.json`, `/logs.json`, `/metrics` |
+| `src/web_ui.cpp`           | The tabbed web UI page (HTML + CSS + JS, served from flash) |
 | `src/anemometer.cpp`       | CAN/TWAI wind ingestion |
 | `src/atmosphere.cpp`       | MCP9808 + BME280 |
 | `src/rainmeter.cpp`        | Rain bucket + tip LED |
