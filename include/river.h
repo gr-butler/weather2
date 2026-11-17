@@ -45,7 +45,7 @@ private:
 
     // Parse the measures JSON body; on success sets outLevel/outPeriod to the
     // most-recent reading. Returns false if no valid reading is present.
-    bool parseRiverData(Stream &body, double &outLevel, double &outPeriod);
+    bool parseRiverData(const String &body, double &outLevel, double &outPeriod);
 
     // NVS persistence: load last-known level on boot; save at most once per
     // hour after each successful API fetch to limit flash wear.

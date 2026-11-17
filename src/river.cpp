@@ -99,9 +99,23 @@ bool RiverMonitor::fetchAndUpdate() {
         return false;
     }
 
-    double level = 0.0, period = 0.0;
-    bool ok = parseRiverData(http.getStream(), level, period);
+    // Read the whole body through HTTPClient rather than parsing getStream():
+    // the raw stream is not chunk-decoded, and this API (behind a 5-minute
+    // cache) answers uncached requests with Transfer-Encoding: chunked. Parsed
+    // raw, the leading chunk-size line reads as a bare JSON number, the
+    // document appears to have no items, and the poll fails. The body is small
+    // (~2.4 KB).
+    String body = http.getString();
     http.end();
+    if (body.length() == 0) {
+        Serial.println("River: empty response body");
+        fetchErrors_++;
+        lastScrapeSuccess_ = false;
+        return false;
+    }
+
+    double level = 0.0, period = 0.0;
+    bool ok = parseRiverData(body, level, period);
 
     if (!ok) {
         Serial.println("River: no valid readings in response");
@@ -120,7 +134,7 @@ bool RiverMonitor::fetchAndUpdate() {
     return true;
 }
 
-bool RiverMonitor::parseRiverData(Stream &body, double &outLevel,
+bool RiverMonitor::parseRiverData(const String &body, double &outLevel,
                                   double &outPeriod) {
     // A station exposes several measures; only keep the fields we need so the
     // (potentially multi-KB) document parses within the ESP32 heap budget.
