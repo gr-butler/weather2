@@ -131,7 +131,32 @@ reporting logic.
 | `culverhay/weather/weatherstation/command` | subscribe | on demand  | Inbound commands (see below) |
 | `culverhay/weather/weatherstation/command/ack` | publish | on demand | Command acknowledgements / replies |
 | `culverhay/weather/weatherstation/status`  | publish   | on (re)connect + on demand | **Retained** health snapshot: seeded on every MQTT (re)connect (incl. startup) and refreshed by the `status` command |
-| `culverhay/weather/weatherstation/beacon`  | publish   | every 30 s | Presence broadcast `{id, ip_address, command_topic}` |
+| `beacon/weatherstation`     | publish   | on (re)connect + every 30 s | **Retained** root discovery-registry entry (payload below) |
+
+The beacon is the one topic outside the `<site>/<class>/<id>` tree: it lives at
+the root as `beacon/<id>`, so subscribing to `beacon/#` lists every device on
+the estate (see [Standard-Patterns.md](../Standard-Patterns.md) §1.6). The
+station registers an empty retained last-will on the same topic, so the broker
+removes the entry if the connection is lost; the `reset` command clears it the
+same way before restarting.
+
+`beacon` payload:
+
+```json
+{
+  "id": "weatherstation",
+  "class": "weather",
+  "base": "culverhay/weather/weatherstation",
+  "ip": "0.0.0.0",
+  "command_topic": "culverhay/weather/weatherstation/command",
+  "version": "1.2.3",
+  "mac": "AA:BB:CC:DD:EE:FF",
+  "boot_reason": "power-on",
+  "uptime": 12345
+}
+```
+
+`uptime` is seconds since boot.
 
 ### Commands
 
