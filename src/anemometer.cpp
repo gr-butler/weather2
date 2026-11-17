@@ -42,6 +42,13 @@ constexpr uint32_t CanTaskStackWords = 4096;
 constexpr UBaseType_t CanTaskPriority = 5; // above loop() (1), below WiFi
 constexpr BaseType_t CanTaskCore = 0;
 constexpr unsigned long RxBlockMs = 20; // max sleep between sampler ticks
+// Cede core 0 after draining this many frames back-to-back. Under normal 4 Hz
+// traffic the FIFO never holds this many, so it never triggers; but a faulty /
+// flooding masthead (or bus noise producing a torrent of valid frames) would
+// otherwise spin this priority-5 core-0 task without ever blocking, starving the
+// core-0 idle task and tripping the Task Watchdog (seen as a TASK_WDT reset on
+// IDLE0). The 1-tick yield lets IDLE0 run and feed its watchdog.
+constexpr uint32_t DrainYieldEvery = 16;
 } // namespace
 
 void Anemometer::loadWindConfig() {
@@ -178,9 +185,16 @@ void Anemometer::taskLoop() {
         // queued. Blocking here means the task sleeps when the bus is idle.
         twai_message_t msg;
         if (twai_receive(&msg, pdMS_TO_TICKS(RxBlockMs)) == ESP_OK) {
+            uint32_t drained = 0;
             do {
                 if (msg.identifier == WIND_CAN_ID && !msg.rtr) {
                     processFrame(msg);
+                }
+                // Cede core 0 periodically so a frame flood cannot spin this
+                // task and starve the idle task / Task Watchdog.
+                if (++drained >= DrainYieldEvery) {
+                    drained = 0;
+                    vTaskDelay(1);
                 }
             } while (twai_receive(&msg, 0) == ESP_OK);
         }

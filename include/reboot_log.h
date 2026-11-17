@@ -32,6 +32,12 @@ void begin();
 // `detail` is an optional short human string kept only for the next boot log.
 void setPending(Reason reason, const char *detail = "");
 
+// Wipe the persisted history: the last-5 ring buffer, the stored crash summary,
+// and any core dump a pre-update crash left in flash. Call this just before an
+// OTA reboot so the post-update boot starts from a clean slate ("02" then any
+// genuinely new crashes), instead of carrying old crashes forward.
+void clearHistory();
+
 // Comma-separated 2-digit codes, most-recent first, for the MQTT status payload.
 String historyCodes();
 
@@ -43,5 +49,12 @@ String historyCodes();
 // Surfaced in the boot log and the MQTT status payload so a headless remote
 // crash can be diagnosed without a serial console.
 String crashDetail();
+
+// Walks every heap region for corruption right now (cheap — no allocation).
+// Logs and returns false if any is found. The recurring panic_abort() crash
+// (see repo notes) unwinds with no useful backtrace, so this is called
+// periodically and after heap-heavy handlers to narrow down WHERE the
+// corruption happens, without needing a full heap-poisoning sdkconfig rebuild.
+bool checkHeapIntegrity(const char *context);
 
 } // namespace rebootlog

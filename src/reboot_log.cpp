@@ -2,6 +2,7 @@
 
 #include <Preferences.h>
 #include <esp_core_dump.h>
+#include <esp_heap_caps.h>
 #include <esp_system.h>
 
 #include "weblog.h"
@@ -161,6 +162,22 @@ void setPending(Reason reason, const char *detail) {
     g_pendingMagic = kPendingMagic;
 }
 
+void clearHistory() {
+    Preferences prefs;
+    prefs.begin(kNs, /*readOnly=*/false);
+    prefs.remove(kKeyHist);
+    prefs.remove(kKeyCrash);
+    prefs.end();
+    // Drop any core dump a pre-update crash left behind so the next boot does
+    // not re-capture it and report a stale crash as if it were new.
+#if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH && CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF
+    if (esp_core_dump_image_check() == ESP_OK) {
+        esp_core_dump_image_erase();
+    }
+#endif
+    Serial.println("Reboot history + crash summary cleared");
+}
+
 String historyCodes() {
     uint8_t hist[kMaxHistory] = {0};
     Preferences prefs;
@@ -189,6 +206,14 @@ String crashDetail() {
     String detail = prefs.getString(kKeyCrash, "");
     prefs.end();
     return detail;
+}
+
+bool checkHeapIntegrity(const char *context) {
+    bool ok = heap_caps_check_integrity_all(/*print_errors=*/true);
+    if (!ok) {
+        Serial.printf("*** HEAP CORRUPTION DETECTED (context=%s) ***\n", context);
+    }
+    return ok;
 }
 
 } // namespace rebootlog

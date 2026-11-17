@@ -57,18 +57,27 @@ constexpr int ReportFreqMin = 15;
 // instead of waiting for the next update.
 constexpr unsigned long MqttPublishIntervalMs = 30000;
 
-// MQTT — these MUST NOT change (consumed by downstream dashboards).
-constexpr const char *MqttTopic = "culverhay/weather";       // AGENTS.md Rule 1
-constexpr const char *MqttAppTopic = "culverhay/weather/app"; // app-only smoothed payload
+// MQTT identity. Payload field names + the legacy data topic below are locked
+// by downstream dashboards (AGENTS.md Rule 1); topic *names* are not.
 constexpr const char *MqttClientId = "weather-mqtt-client";  // matches Go clientID
 constexpr const char *MqttClientName = "weather_station";    // Go dataMap "name"
+constexpr const char *MqttStationId = "weatherstation";      // <id> segment
+constexpr const char *MqttClass = "weather";                 // <class> segment (beacon payload)
+constexpr const char *MqttBaseTopic = "culverhay/weather/weatherstation"; // <site>/<class>/<id>
 
-// MQTT control plane (modelled on the Waterbutt project). These are NEW topics
-// and do not affect the locked data topic above.
-constexpr const char *MqttStationId = "weatherstation";              // device identity
-constexpr const char *MqttCommandTopic = "culverhay/weather/command"; // subscribe: commands in
-constexpr const char *MqttStatusTopic = "culverhay/weather/status";   // publish: command replies
-constexpr const char *MqttBeaconTopic = "beacon/weatherstation";      // publish: periodic presence
+// Unified estate topic tree: <site>/<class>/<id>/<channel>.
+// base = culverhay/weather/weatherstation (see Standard-Patterns.md §1).
+constexpr const char *MqttTelemetryTopic = "culverhay/weather/weatherstation/telemetry";        // data (retained)
+constexpr const char *MqttTelemetryAppTopic = "culverhay/weather/weatherstation/telemetry/app"; // app-only smoothed (retained)
+constexpr const char *MqttCommandTopic = "culverhay/weather/weatherstation/command";            // subscribe: commands in
+constexpr const char *MqttCommandAckTopic = "culverhay/weather/weatherstation/command/ack";     // publish: command replies
+constexpr const char *MqttStatusTopic = "culverhay/weather/weatherstation/status";              // publish: retained state (on-change)
+constexpr const char *MqttBeaconTopic = "beacon/weatherstation";                                // publish: ROOT discovery registry (retained, LWT-cleared)
+
+// Legacy flat data topic, dual-published alongside MqttTelemetryTopic so
+// existing dashboards keep working during migration. Remove once every consumer
+// has moved to the unified telemetry topic.
+constexpr const char *MqttLegacyDataTopic = "culverhay/weather";         // AGENTS.md Rule 1
 constexpr unsigned long MqttBeaconIntervalMs = 30000;    // broadcast presence every 30 s
 constexpr unsigned long MqttReconnectIntervalMs = 15000; // throttle reconnect attempts
 

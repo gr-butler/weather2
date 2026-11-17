@@ -56,6 +56,10 @@ WeatherWebServer webServer(&atmosphere, &rainmeter, &anemometer, &riverMonitor);
 TelnetServer telnet(&atmosphere, &rainmeter, &anemometer, &riverMonitor, &reporting);
 
 unsigned long lastHeartbeatMs = 0;
+// Periodic heap corruption check (see reboot_log.h) to help localise the
+// recurring panic_abort() crash.
+unsigned long lastHeapCheckMs = 0;
+constexpr uint32_t kHeapCheckIntervalMs = 10000;
 
 void syncTime() {
     // configTzTime sets the TZ and starts SNTP. Non-blocking; we wait briefly.
@@ -165,6 +169,9 @@ void setup() {
     // Tag the imminent post-OTA auto-reboot so it shows as "firmware upgrade".
     ElegantOTA.onEnd([](bool success) {
         if (success) {
+            // Wipe the old reboot/crash history first so any crashes after this
+            // update stand out against a clean slate ("02" then new entries).
+            rebootlog::clearHistory();
             rebootlog::setPending(rebootlog::Reason::FirmwareUpgrade, "OTA update");
         }
     });
@@ -216,6 +223,12 @@ void loop() {
     }
     heartbeatLed.service();
     rainTipLed.service();
+
+    unsigned long nowMs = millis();
+    if (nowMs - lastHeapCheckMs >= kHeapCheckIntervalMs) {
+        lastHeapCheckMs = nowMs;
+        rebootlog::checkHeapIntegrity("periodic");
+    }
 
     esp_task_wdt_reset();
 }

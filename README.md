@@ -72,12 +72,17 @@ link is active. The abstraction lives in [include/net.h](include/net.h) /
 The broker connection uses **TLS** (port 8883) with username/password auth and a
 CA certificate ([include/mqtt_ca_cert.h](include/mqtt_ca_cert.h)).
 
-### Data topic (locked — do not rename)
+### Data topic
+
+Topics follow the estate-wide tree `<site>/<class>/<id>/<channel>`
+(see [Standard-Patterns.md](../Standard-Patterns.md) §1); base =
+`culverhay/weather/weatherstation`.
 
 | Topic               | Direction | Cadence       | Payload |
 |---------------------|-----------|---------------|---------|
-| `culverhay/weather` | publish   | every 30 s    | Core JSON (below) |
-| `culverhay/weather/app` | publish | every 30 s | App JSON (same shape; wind is 30 s summary) |
+| `culverhay/weather/weatherstation/telemetry` | publish   | every 30 s    | Core JSON (below) |
+| `culverhay/weather/weatherstation/telemetry/app` | publish | every 30 s | App JSON (same shape; wind is 30 s summary) |
+| `culverhay/weather` | publish   | every 30 s    | **Legacy** dual-publish of the core JSON, kept for existing dashboards during migration |
 
 ```json
 {
@@ -110,8 +115,8 @@ CA certificate ([include/mqtt_ca_cert.h](include/mqtt_ca_cert.h)).
 > `chip_temp_c` is the ESP32 internal die temperature (°C, diagnostic only —
 > coarse and uncalibrated, not an ambient/weather reading).
 
-`culverhay/weather/app` keeps the same payload shape for app compatibility but
-uses app-facing wind values:
+`culverhay/weather/weatherstation/telemetry/app` keeps the same payload shape
+for app compatibility but uses app-facing wind values:
 - `windspeed`: mean over the last 30 s
 - `winddir`: circular mean over the last 30 s
 - `windgust`: peak 3-second average found within the last 30 s
@@ -123,13 +128,15 @@ reporting logic.
 
 | Topic                       | Direction | Cadence    | Purpose |
 |-----------------------------|-----------|------------|---------|
-| `culverhay/weather/command` | subscribe | on demand  | Inbound commands (see below) |
-| `culverhay/weather/status`  | publish   | on (re)connect + on demand | **Retained** health snapshot: seeded on every MQTT (re)connect (incl. startup) and refreshed by the `status` command |
-| `beacon/weatherstation`     | publish   | every 30 s | Presence broadcast `{id, ip_address, command_topic}` |
+| `culverhay/weather/weatherstation/command` | subscribe | on demand  | Inbound commands (see below) |
+| `culverhay/weather/weatherstation/command/ack` | publish | on demand | Command acknowledgements / replies |
+| `culverhay/weather/weatherstation/status`  | publish   | on (re)connect + on demand | **Retained** health snapshot: seeded on every MQTT (re)connect (incl. startup) and refreshed by the `status` command |
+| `culverhay/weather/weatherstation/beacon`  | publish   | every 30 s | Presence broadcast `{id, ip_address, command_topic}` |
 
 ### Commands
 
-Publish one of these strings to `culverhay/weather/command` (case-insensitive):
+Publish one of these strings to `culverhay/weather/weatherstation/command`
+(case-insensitive):
 
 | Command                         | Action |
 |---------------------------------|--------|
@@ -148,9 +155,10 @@ unit without a physical visit, then `resume` or `reset`.
 
 The `status` topic carries device **state only** (identity, firmware, boot
 reason, reboot history, recovery flag, per-sensor health) — never live weather
-readings, which stay on `culverhay/weather`. It is **retained** and republished
+readings, which stay on the telemetry topic. It is **retained** and republished
 **only when the state changes** (a reboot, a recovery toggle, or a sensor going
-online/offline); the `status` command re-emits it on demand.
+online/offline); the `status` command re-emits it on demand. Command replies
+(e.g. `reporting now`, IP, version) go to the `command/ack` topic, not `status`.
 
 `status` payload:
 
@@ -312,8 +320,9 @@ scrape_configs:
 ## Reporting schedule
 
 - **Every 30 seconds:** refresh sensor values, publish a **retained** message to
-  `culverhay/weather` (so the mobile app gets the latest reading immediately on
-  subscribe).
+  `culverhay/weather/weatherstation/telemetry` (dual-published to the legacy
+  `culverhay/weather` topic) so the mobile app gets the latest reading
+  immediately on subscribe.
 - **Every 15 minutes (`ReportFreqMin`):** upload to WOW MetOffice + persist rain
   totals to NVS.
 - **09:00 local:** reset the daily rain total (WOW 9am–9am convention).

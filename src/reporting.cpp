@@ -1,6 +1,7 @@
 #include "reporting.h"
 
 #include <HTTPClient.h>
+#include <WiFi.h>
 #include <ctype.h>
 #include <esp_heap_caps.h>
 #include <esp_system.h>
@@ -167,14 +168,21 @@ bool Reporting::mqttReconnect() {
     if (mqtt_.connected()) {
         return true;
     }
+    // Release any lingering TLS/socket resources from a dropped connection
+    // before a fresh handshake. Reconnecting a WiFiClientSecure without stop()
+    // leaks the previous mbedTLS context (CA-cert parse + ~tens of KB of SSL
+    // buffers) each drop, slowly exhausting the heap until allocations fail.
+    net_.stop();
     Serial.print("MQTT connecting (TLS)... ");
     // Authenticate with broker credentials when supplied (EMQX/TLS brokers
     // typically require this); fall back to anonymous connect otherwise.
     bool ok;
     if (strlen(MQTT_USERNAME) > 0) {
-        ok = mqtt_.connect(clientId_.c_str(), MQTT_USERNAME, MQTT_PASSWORD);
+        ok = mqtt_.connect(clientId_.c_str(), MQTT_USERNAME, MQTT_PASSWORD,
+                           MqttBeaconTopic, /*willQoS=*/1, /*willRetain=*/true, "");
     } else {
-        ok = mqtt_.connect(clientId_.c_str());
+        ok = mqtt_.connect(clientId_.c_str(),
+                           MqttBeaconTopic, /*willQoS=*/1, /*willRetain=*/true, "");
     }
     if (ok) {
         Serial.println("connected");
@@ -188,6 +196,7 @@ bool Reporting::mqttReconnect() {
         // this only actually sends when the status differs from what the broker
         // already holds (e.g. the first connect after a reboot).
         publishStatus();
+        publishBeacon(); // seed the retained root-registry entry immediately
         return true;
     }
     Serial.printf("failed, rc=%d\n", mqtt_.state());
@@ -238,11 +247,14 @@ void Reporting::publishMqtt() {
              rain_ ? rain_->getDayAccumulation() : 0.0f,
              river_ ? river_->level() : 0.0f, chipTempC);
 
-    if (mqtt_.publish(MqttTopic, payload, /*retained=*/true)) {
-        Serial.printf("MQTT published to %s\n", MqttTopic);
+    if (mqtt_.publish(MqttTelemetryTopic, payload, /*retained=*/true)) {
+        Serial.printf("MQTT published to %s\n", MqttTelemetryTopic);
     } else {
         Serial.println("MQTT publish failed");
     }
+    // Dual-publish the legacy flat data topic for existing dashboards during
+    // migration (remove once all consumers use MqttTelemetryTopic).
+    mqtt_.publish(MqttLegacyDataTopic, payload, /*retained=*/true);
 
     // App-only topic: same cadence, but wind fields are smoothed over the last
     // AppWindSummarySeconds seconds (direction circular mean, speed mean, gust
@@ -260,10 +272,10 @@ void Reporting::publishMqtt() {
              rain_ ? rain_->getDayAccumulation() : 0.0f,
              river_ ? river_->level() : 0.0f, chipTempC, AppWindSummarySeconds);
 
-    if (mqtt_.publish(MqttAppTopic, appPayload, /*retained=*/true)) {
-        Serial.printf("MQTT published to %s\n", MqttAppTopic);
+    if (mqtt_.publish(MqttTelemetryAppTopic, appPayload, /*retained=*/true)) {
+        Serial.printf("MQTT published to %s\n", MqttTelemetryAppTopic);
     } else {
-        Serial.printf("MQTT publish failed for %s\n", MqttAppTopic);
+        Serial.printf("MQTT publish failed for %s\n", MqttTelemetryAppTopic);
     }
 }
 
@@ -473,8 +485,9 @@ void Reporting::onMqttMessage(char *topic, uint8_t *payload,
 }
 
 // Handle a single command string. Commands are case-insensitive. Replies are
-// published to the status topic. Anything relevant to a weather station lives
-// here (mirrors the Waterbutt command set, minus the pump-specific verbs).
+// published to the command/ack topic; retained device state lives on the status
+// topic. Anything relevant to a weather station lives here (mirrors the
+// Waterbutt command set, minus the pump-specific verbs).
 void Reporting::handleCommand(String cmd) {
     cmd.toLowerCase();
 
@@ -483,49 +496,50 @@ void Reporting::handleCommand(String cmd) {
             publishStatus(/*force=*/true);
         }
     } else if (cmd == "report" || cmd == "report-now") {
-        mqtt_.publish(MqttStatusTopic, "reporting now");
+        mqtt_.publish(MqttCommandAckTopic, "reporting now");
         forceReport();
     } else if (cmd == "ip" || cmd == "address") {
-        mqtt_.publish(MqttStatusTopic, net::ip().toString().c_str());
+        mqtt_.publish(MqttCommandAckTopic, net::ip().toString().c_str());
     } else if (cmd == "version") {
-        mqtt_.publish(MqttStatusTopic, _SEMVER_CORE);
+        mqtt_.publish(MqttCommandAckTopic, _SEMVER_CORE);
     } else if (cmd == "reset-rain" || cmd == "resetrain") {
         if (rain_) {
             rain_->resetDayAccumulation();
         }
         v_.rainDayIn = 0.0;
         savePersisted();
-        mqtt_.publish(MqttStatusTopic, "daily rain total reset");
+        mqtt_.publish(MqttCommandAckTopic, "daily rain total reset");
         Serial.println("Command: daily rain total reset");
     } else if (cmd == "recover" || cmd == "recovery") {
         recoveryMode_ = true;
-        mqtt_.publish(MqttStatusTopic,
+        mqtt_.publish(MqttCommandAckTopic,
                       "recovery mode: MQTT+OTA only, send 'resume' or 'reset'");
         publishStatus();
         Serial.println("Command: recovery mode activated");
     } else if (cmd == "resume" || cmd == "normal") {
         recoveryMode_ = false;
-        mqtt_.publish(MqttStatusTopic, "resumed normal operation");
+        mqtt_.publish(MqttCommandAckTopic, "resumed normal operation");
         publishStatus();
         Serial.println("Command: resumed normal operation");
     } else if (cmd == "reset" || cmd == "reboot" || cmd == "restart") {
-        mqtt_.publish(MqttStatusTopic, "rebooting");
+        mqtt_.publish(MqttCommandAckTopic, "rebooting");
         Serial.println("Command: rebooting");
+        mqtt_.publish(MqttBeaconTopic, "", true); // evict from registry before restart
         rebootlog::setPending(rebootlog::Reason::UserCommand, "mqtt reset command");
         delay(200); // let the publish flush
         ESP.restart();
     } else {
         Serial.printf("Command: unknown [%s]\n", cmd.c_str());
         String reply = "unknown command: " + cmd;
-        mqtt_.publish(MqttStatusTopic, reply.c_str());
+        mqtt_.publish(MqttCommandAckTopic, reply.c_str());
     }
 }
 
 // Publish the retained device-status snapshot. Status = device STATE (identity,
 // firmware, boot reason, reboot history, recovery, sensor health) — deliberately
 // NOT live telemetry — so it only changes on meaningful events. Live weather
-// readings live on the data topic (culverhay/weather). Publishes only when the
-// payload differs from the last one, unless `force` is set (the `status` command).
+// readings live on the telemetry topic. Publishes only when the payload differs
+// from the last one, unless `force` is set (the `status` command).
 void Reporting::publishStatus(bool force) {
     char payload[512];
     snprintf(
@@ -554,13 +568,16 @@ void Reporting::publishStatus(bool force) {
     }
 }
 
-// Broadcast presence so apps can discover the station and its command topic.
+// Retained root-registry beacon (Standard-Patterns.md §1.6): a self-describing
+// entry at beacon/<id> so `beacon/#` enumerates the whole estate class-agnostically.
 void Reporting::publishBeacon() {
-    String ip = net::ip().toString();
-
-    char payload[160];
+    char payload[320];
     snprintf(payload, sizeof(payload),
-             "{\"id\":\"%s\",\"ip_address\":\"%s\",\"command_topic\":\"%s\"}",
-             MqttStationId, ip.c_str(), MqttCommandTopic);
-    mqtt_.publish(MqttBeaconTopic, payload);
+             "{\"id\":\"%s\",\"class\":\"%s\",\"base\":\"%s\",\"ip\":\"%s\","
+             "\"command_topic\":\"%s\",\"version\":\"%s\",\"mac\":\"%s\","
+             "\"boot_reason\":\"%s\",\"uptime\":%lu}",
+             MqttStationId, MqttClass, MqttBaseTopic, net::ip().toString().c_str(),
+             MqttCommandTopic, _SEMVER_CORE, WiFi.macAddress().c_str(),
+             bootReasonString(), millis() / 1000UL);
+    mqtt_.publish(MqttBeaconTopic, payload, /*retained=*/true);
 }
